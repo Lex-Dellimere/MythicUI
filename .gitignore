@@ -1,0 +1,14 @@
+# build output
+build/
+*.o
+*.obj
+*.exe
+
+# internal project notes, probes and dev-only test infrastructure
+.apex/
+.devgit/
+tests/
+tools/
+scripts/test-all.sh
+__pycache__/
+CLAUDE.md

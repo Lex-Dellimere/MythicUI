@@ -1,0 +1,109 @@
+// A small tour of what MythicUI can do today: layout, cards, buttons, toggles,
+// sliders, progress, icons, keyboard focus (press Tab) and light/dark themes.
+import "mythic/mythic";
+
+struct App {
+  dark: bool;
+  mode: int32;          // 0 debug, 1 release, 2 profile
+  threads: float32;
+  optimize: bool;
+  warnings: bool;
+  strip: bool;
+  notify: bool;
+  autosave: bool;
+  building: bool;
+  progress: float32;
+  builds: int32;
+}
+
+fn header(ui: MythicUi*, app: App*) {
+  mythic_row_begin(ui, { width: mythic_grow(), align_y: MYTHIC_ALIGN_CENTER, gap: 12 });
+    mythic_column_begin(ui, { gap: 2 });
+      mythic_label_ex(ui, "MythicUI", { role: MYTHIC_TYPE_HEADING });
+      mythic_label_ex(ui, "Immediate-mode GUI for Mettle. Press Tab to move around.", { role: MYTHIC_TYPE_BODY, tone: MYTHIC_TONE_SECONDARY });
+    mythic_end(ui);
+    mythic_spacer(ui);
+    if (mythic_switch(ui, "Dark mode", &app->dark)) {
+      if (app->dark) { mythic_set_theme(ui, mythic_theme_dark()); } else { mythic_set_theme(ui, mythic_theme_light()); }
+    }
+  mythic_end(ui);
+}
+
+fn build_card(ui: MythicUi*, app: App*) {
+  mythic_card_begin_ex(ui, { width: mythic_fixed(340), pad: mythic_pad(20), gap: 14 }, { elevation: 1 });
+    mythic_label_ex(ui, "Build", { role: MYTHIC_TYPE_TITLE });
+    mythic_label_ex(ui, "Profile", { role: MYTHIC_TYPE_LABEL, tone: MYTHIC_TONE_SECONDARY });
+    mythic_row_begin(ui, { gap: 16 });
+      mythic_radio(ui, "Debug", &app->mode, 0);
+      mythic_radio(ui, "Release", &app->mode, 1);
+      mythic_radio(ui, "Profile", &app->mode, 2);
+    mythic_end(ui);
+    mythic_checkbox(ui, "Optimize", &app->optimize);
+    mythic_checkbox(ui, "Treat warnings as errors", &app->warnings);
+    mythic_checkbox(ui, "Strip symbols", &app->strip);
+    mythic_separator(ui);
+    if (app->building) {
+      mythic_progress_ex(ui, "Compiling", app->progress, { width: mythic_grow() });
+    } else if (app->builds > 0) {
+      mythic_progress_ex(ui, "Build finished", 1.0, { width: mythic_grow(), color: mythic_theme(ui)->colors.success });
+    } else {
+      mythic_progress_ex(ui, "Ready", 0.0, { width: mythic_grow() });
+    }
+    mythic_row_begin(ui, { gap: 8 });
+      mythic_disabled_begin(ui, app->building);
+        if (mythic_button_ex(ui, "Build", { variant: MYTHIC_BTN_PRIMARY, icon: MYTHIC_ICON_ARROW_RIGHT })) {
+          app->building = true;
+          app->progress = 0.0;
+        }
+      mythic_disabled_end(ui);
+      if (mythic_button(ui, "Clean")) { app->builds = 0; app->progress = 0.0; }
+      mythic_button_ex(ui, "Logs", { variant: MYTHIC_BTN_GHOST });
+    mythic_end(ui);
+  mythic_end(ui);
+}
+
+fn settings_card(ui: MythicUi*, app: App*) {
+  mythic_card_begin_ex(ui, { width: mythic_grow(), pad: mythic_pad(20), gap: 14 }, { elevation: 1 });
+    mythic_label_ex(ui, "Settings", { role: MYTHIC_TYPE_TITLE });
+    mythic_slider_ex(ui, "CPU budget", &app->threads, { min: 0.0, max: 1.0, step: 0.05, width: mythic_grow() });
+    mythic_switch(ui, "Desktop notifications", &app->notify);
+    mythic_switch(ui, "Save on build", &app->autosave);
+    mythic_separator(ui);
+    mythic_label_ex(ui, "Everything here is drawn by MythicUI itself on the CPU: rounded corners, soft shadows, icons and Inter text, with no toolkit underneath.", { role: MYTHIC_TYPE_BODY, tone: MYTHIC_TONE_SECONDARY, wrap: true, width: mythic_grow() });
+    mythic_row_begin(ui, { gap: 10, align_y: MYTHIC_ALIGN_CENTER });
+      var c: uint32 = mythic_theme(ui)->colors.text_secondary;
+      mythic_icon(ui, MYTHIC_ICON_CHECK, 16.0, c);
+      mythic_icon(ui, MYTHIC_ICON_SEARCH, 16.0, c);
+      mythic_icon(ui, MYTHIC_ICON_INFO, 16.0, c);
+      mythic_icon(ui, MYTHIC_ICON_WARNING, 16.0, c);
+      mythic_icon(ui, MYTHIC_ICON_PLUS, 16.0, c);
+      mythic_icon(ui, MYTHIC_ICON_CLOSE, 16.0, c);
+      mythic_icon(ui, MYTHIC_ICON_MENU, 16.0, c);
+    mythic_end(ui);
+  mythic_end(ui);
+}
+
+fn frame(ui: MythicUi*, ud: rawptr) {
+  var app: App* = (App*)ud;
+  if (app->building) {
+    app->progress = app->progress + mythic_dt(ui) * 0.35;
+    if (app->progress >= 1.0) { app->building = false; app->builds = app->builds + 1; }
+    mythic_request_frame_in(ui, 16);
+  }
+  mythic_column_begin(ui, { width: mythic_grow(), height: mythic_grow(), pad: mythic_pad(32), gap: 24 });
+    header(ui, app);
+    mythic_row_begin(ui, { width: mythic_grow(), gap: 20 });
+      build_card(ui, app);
+      settings_card(ui, app);
+    mythic_end(ui);
+  mythic_end(ui);
+}
+
+fn main() -> int32 {
+  var app: App;
+  app.mode = 1;
+  app.threads = 0.6;
+  app.optimize = true;
+  app.notify = true;
+  return mythic_run({ title: "MythicUI showcase", width: 860, height: 560 }, &frame, (rawptr)&app);
+}

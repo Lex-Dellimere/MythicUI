@@ -1,0 +1,14 @@
+// mythic_w_scroll (W-C): scroll view with overlay scrollbars, list (DESIGN-SYSTEM §7.10, §7.11). M0 stubs.
+import "mythic_base";
+import "mythic_types";
+import "mythic_ctx";
+import "mythic_anim";
+import "mythic_paint";
+import "mythic_layout";
+
+export fn mythic_scroll_begin(ui: MythicUi*, id_label: string, b: MythicBox) { }
+export fn mythic_scroll_end(ui: MythicUi*) { }
+export fn mythic_list_begin(ui: MythicUi*, id_label: string, b: MythicBox) { }
+export fn mythic_list_end(ui: MythicUi*) { }
+export fn mythic_list_item(ui: MythicUi*, label: string, selected: bool) -> bool { return false; }
+export fn mythic_list_visible_range(ui: MythicUi*, row_h: float32, count: int64, first: int64*, last: int64*) { }

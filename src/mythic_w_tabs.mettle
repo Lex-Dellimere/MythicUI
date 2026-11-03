@@ -1,0 +1,9 @@
+// mythic_w_tabs (W-C): underline tabs with sliding indicator (DESIGN-SYSTEM §7.14). M0 stub.
+import "mythic_base";
+import "mythic_types";
+import "mythic_ctx";
+import "mythic_anim";
+import "mythic_paint";
+import "mythic_layout";
+
+export fn mythic_tabs(ui: MythicUi*, id_label: string, labels: string[], selected: int32*) -> bool { return false; }

@@ -1,0 +1,26 @@
+// mythic_w_text_input (W-B from M3): single-line text input and MythicTextBuf helpers
+// (DECISIONS §4, DESIGN-SYSTEM §7.8). M0 stubs. MythicTextBuf/MythicEditState live in mythic_ctx.
+import "std/mem";
+import "mythic_base";
+import "mythic_types";
+import "mythic_ctx";
+import "mythic_anim";
+import "mythic_paint";
+import "mythic_layout";
+import "mythic_text";
+
+// option struct owned by W-C; zero value = default (md, no placeholder, no icon)
+export struct MythicInputOpts {
+  placeholder: string;  // copied each frame, never stored (§5 string rule)
+  size: int32;          // MYTHIC_CTRL_*
+  icon: int32;          // leading MYTHIC_ICON_*; 0 = none
+  width: MythicSize;
+  error: bool;
+  read_only: bool;
+}
+
+export fn mythic_text_input(ui: MythicUi*, label: string, buf: MythicTextBuf*) -> bool { return false; }
+export fn mythic_text_input_ex(ui: MythicUi*, label: string, buf: MythicTextBuf*, o: MythicInputOpts) -> bool { return false; }
+export fn mythic_textbuf_set(buf: MythicTextBuf*, s: string) { }
+export fn mythic_textbuf_str(buf: MythicTextBuf*) -> string { var s: string = ""; return s; }
+export fn mythic_textbuf_free(buf: MythicTextBuf*) { }

@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# Build one MythicUI app for Linux (default) or Windows (cross-build with mingw).
+# usage: mythic-build [--windows] [--console] [--release] app.mettle -o out
+#   Linux:   mettle --build app.mettle -o out
+#   Windows: app -> COFF, runtime string.mettle -> COFF (cached in build/winrt/),
+#            linked by x86_64-w64-mingw32-gcc with user32/gdi32/kernel32; -mwindows unless --console.
+# Env: METTLE (compiler path), MINGW_CC (linker).
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+METTLE="${METTLE:-$ROOT/../Mettle/bin/mettle}"
+MINGW_CC="${MINGW_CC:-x86_64-w64-mingw32-gcc}"
+RT_DIR="$(cd "$(dirname "$METTLE")" && pwd)/runtime"
+
+usage() { echo "usage: mythic-build [--windows] [--console] [--release] app.mettle -o out" >&2; exit 2; }
+
+windows=0; console=0; release=0; src=""; out=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --windows) windows=1 ;;
+    --console) console=1 ;;
+    --release) release=1 ;;
+    -o) [ $# -ge 2 ] || usage; out="$2"; shift ;;
+    -h|--help) usage ;;
+    -*) echo "mythic-build: unknown option $1" >&2; usage ;;
+    *) [ -z "$src" ] || usage; src="$1" ;;
+  esac
+  shift
+done
+[ -n "$src" ] && [ -n "$out" ] || usage
+[ -f "$src" ] || { echo "mythic-build: no such file: $src" >&2; exit 2; }
+[ -x "$METTLE" ] || { echo "mythic-build: compiler not found: $METTLE" >&2; exit 2; }
+
+mflags=()
+[ "$release" = 1 ] && mflags+=(--release)
+mkdir -p "$(dirname "$out")"
+
+if [ "$windows" = 0 ]; then
+  exec "$METTLE" --build "${mflags[@]}" "$src" -o "$out"
+fi
+
+command -v "$MINGW_CC" >/dev/null || { echo "mythic-build: $MINGW_CC not found" >&2; exit 2; }
+case "$out" in *.exe) ;; *) out="$out.exe" ;; esac
+
+winrt="$ROOT/build/winrt"
+mkdir -p "$winrt"
+rt="$winrt/rt_string.obj"
+if [ ! -f "$rt" ] || [ "$RT_DIR/string.mettle" -nt "$rt" ] || [ "$METTLE" -nt "$rt" ]; then
+  "$METTLE" --target x86_64-windows "$RT_DIR/string.mettle" -o "$rt.$$.obj"
+  mv -f "$rt.$$.obj" "$rt"   # atomic: concurrent builds never link a half-written runtime
+fi
+
+obj="$out.obj"
+"$METTLE" --target x86_64-windows "${mflags[@]}" "$src" -o "$obj"
+lflags=(-luser32 -lgdi32 -lkernel32)
+[ "$console" = 1 ] || lflags+=(-mwindows)
+"$MINGW_CC" "$obj" "$rt" -o "$out" "${lflags[@]}"
+rm -f "$obj"
+echo "Built executable '$out'"
