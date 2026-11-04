@@ -1,4 +1,4 @@
-// mythic_ctx (W-C): the per-window UI context: frame lifecycle, ID stack, ID store, input,
+// mythic_ctx: the per-window UI context: frame lifecycle, ID stack, ID store, input,
 // interaction against previous-frame rects, focus, theme stack (DECISIONS §2, §3, §4, §9).
 import "std/mem";
 import "mythic_base";
@@ -132,6 +132,7 @@ export struct MythicUi {
   focus_id: uint64;
   focus_seen: bool;
   focus_claimed: bool;
+  pass_focus: uint64;              // focus_id when this pass began
   activate_id: uint64;
   focus_visible: bool;
   focus_a: MythicVec<MythicFocusEnt>;
@@ -206,7 +207,8 @@ export fn mythic_ctx_input_begin(ui: MythicUi*) {
 }
 
 /// Feeds one platform event. Returns false when the event must wait for the next frame
-/// (mouse-button trickle: at most one transition per button per frame, §4); the caller keeps it.
+/// (mouse-button trickle: at most one transition per button per frame, §4; keys and text that
+/// would otherwise apply out of order); the caller keeps it.
 /// Returns true when consumed.
 export fn mythic_ctx_feed(ui: MythicUi*, ev: MythicEvent*) -> bool {
   var k: int32 = ev->kind;
@@ -248,12 +250,19 @@ export fn mythic_ctx_feed(ui: MythicUi*, ev: MythicEvent*) -> bool {
     ui->in.wheel.x = ui->in.wheel.x + ev->wheel_x;
     ui->in.wheel.y = ui->in.wheel.y + ev->wheel_y;
   } else if (k == MYTHIC_EV_KEY_DOWN) {
+    // Tab moves focus at frame begin, before anything else this frame is applied
+    if (ev->key == MYTHIC_KEY_TAB && (ui->in.keys.len > 0 || ui->in.text.len > 0)) { return false; }
     ui->in.mods = ev->mods;
     var ke: MythicKeyEvent = { key: ev->key, mods: ev->mods, repeat: ev->repeat };
     mythic_vec_push<MythicKeyEvent>(&ui->in.keys, ke);
   } else if (k == MYTHIC_EV_KEY_UP) {
     ui->in.mods = ev->mods;
   } else if (k == MYTHIC_EV_TEXT) {
+    // a text input applies all text before all keys, so text typed after an editing key waits
+    for i: int64 in 0..ui->in.keys.len {
+      var ke: MythicKeyEvent = ui->in.keys.data[i];
+      if (ke.key >= 256 || (ke.mods & (MYTHIC_MOD_CTRL | MYTHIC_MOD_ALT | MYTHIC_MOD_SUPER)) != 0) { return false; }
+    }
     mythic_vec_push<uint32>(&ui->in.text, ev->codepoint);
   } else if (k == MYTHIC_EV_RESIZE) {
     ui->dev_w = ev->width; ui->dev_h = ev->height;
@@ -338,6 +347,7 @@ export fn mythic_ctx_pass_begin(ui: MythicUi*) {
   mythic_vec_push<uint64>(&ui->id_stack, (uint64)0);
   mythic_vec_clear<MythicTheme*>(&ui->theme_stack);
   ui->repass = false;
+  ui->pass_focus = ui->focus_id;
   ui->disabled_depth = 0;
   ui->dis_n = 0;
   ui->op_n = 0;
@@ -383,6 +393,8 @@ export fn mythic_ctx_pass_end(ui: MythicUi*) -> bool {
     if (ui->in.mouse_released[1] || !ui->in.mouse_down[1]) { ui->active_id = 0; }
     // Escape that no widget consumed clears focus (Amendment 17)
     if (mythic_key_pressed(ui, MYTHIC_KEY_ESCAPE, -1)) { ui->focus_id = 0; }
+    // widgets declared before a focus change drew the old focus: settle so none is left showing it
+    if (ui->focus_id != ui->pass_focus) { ui->repass = true; }
     for i: int32 in 0..4 { ui->in.mouse_pressed[i] = false; ui->in.mouse_released[i] = false; }
     mythic_vec_clear<MythicKeyEvent>(&ui->in.keys);
     mythic_vec_clear<uint32>(&ui->in.text);
