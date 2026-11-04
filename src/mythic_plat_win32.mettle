@@ -1,4 +1,4 @@
-// mythic_plat_win32 (W-A): user32/gdi32/kernel32 backend (DECISIONS §8, Appendix B).
+// mythic_plat_win32: user32/gdi32/kernel32 backend (DECISIONS §8, Appendix B).
 // Compiled only on windows (guarded import in mythic_plat). Externs are never exported and use aliases.
 import "std/mem";
 import "std/io";

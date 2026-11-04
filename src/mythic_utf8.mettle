@@ -1,4 +1,4 @@
-// mythic_utf8 (W-B): UTF-8 decode/encode helpers.
+// mythic_utf8: UTF-8 decode/encode helpers.
 // Invalid input (bad lead byte, bad continuation, overlong form, surrogate, > U+10FFFF,
 // truncated sequence) decodes to U+FFFD and consumes exactly one byte.
 import "mythic_types";
