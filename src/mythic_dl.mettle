@@ -1,4 +1,4 @@
-// mythic_dl (W-B): display-list builders, device px (DECISIONS §6, Appendix A/D).
+// mythic_dl: display-list builders, device px (DECISIONS §6, Appendix A/D).
 // Clip index 0 is always the whole screen (set by mythic_dl_clear).
 import "mythic_types";
 

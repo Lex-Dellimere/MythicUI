@@ -1,4 +1,4 @@
-// mythic_png (W-B): PNG writer (stored deflate, crc32, adler32) for goldens (DECISIONS §10).
+// mythic_png: PNG writer (stored deflate, crc32, adler32) for goldens (DECISIONS §10).
 // Writes 8-bit RGBA (color type 6) from 0xAARRGGBB pixels.
 import "std/io";
 import "mythic_types";

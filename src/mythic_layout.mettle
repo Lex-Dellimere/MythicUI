@@ -1,4 +1,4 @@
-// mythic_layout (W-C): declarative tree + multi-pass layout (DECISIONS §3).
+// mythic_layout: declarative tree + multi-pass layout (DECISIONS §3).
 // Passes: fit widths (pref + min content), resolve widths (fixed, percent, grow, shrink, min/max),
 // wrap text, fit heights, resolve heights, position (scroll offsets, clips), then floating roots.
 import "mythic_base";

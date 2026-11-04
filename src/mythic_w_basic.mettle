@@ -1,4 +1,4 @@
-// mythic_w_basic (W-C): label, heading, button, separator, card/panel, progress
+// mythic_w_basic: label, heading, button, separator, card/panel, progress
 // (DESIGN-SYSTEM §7.2, §7.3, §7.9, §7.12, §7.13).
 import "std/io";
 import "mythic_base";

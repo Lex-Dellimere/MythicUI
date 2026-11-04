@@ -120,7 +120,7 @@ export struct MythicPlatform {
   refresh: fn(rawptr) -> void;                       // set by app; may be 0
   refresh_ud: rawptr;
 }
-// constructors (W-A):
+// constructors:
 //   export fn mythic_plat_native_create() -> MythicPlatform*                    (x11 / win32 file)
 //   export fn mythic_plat_headless_create(w: int32, h: int32, scale: float32) -> MythicPlatform*
 //   export fn mythic_headless_push(p: MythicPlatform*, ev: MythicEvent)

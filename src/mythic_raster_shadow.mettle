@@ -1,4 +1,4 @@
-// mythic_raster_shadow (W-B): gaussian rounded-rect shadows (DECISIONS §6, DESIGN-SYSTEM §5).
+// mythic_raster_shadow: gaussian rounded-rect shadows (DECISIONS §6, DESIGN-SYSTEM §5).
 // Analytic form (Evan Wallace): erf along x of each shape row, gaussian integrated along y,
 // sigma = blur / 2. Results are cached as float alpha tables:
 // - kind 1: corner tile of a quarter-plane with a rounded corner (canonical top-left

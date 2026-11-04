@@ -1,4 +1,4 @@
-// mythic_raster (W-B): tile damage tracking + scanline rasterizer (DECISIONS §6, Appendix D).
+// mythic_raster: tile damage tracking + scanline rasterizer (DECISIONS §6, Appendix D).
 // Framebuffer pixels are 0xAARRGGBB. Colors in the list are straight alpha; blending is
 // source-over in plain sRGB space onto a premultiplied (normally opaque) destination.
 import "mythic_types";
@@ -12,7 +12,7 @@ import "mythic_raster_shadow";
 
 export const MYTHIC_TILE: int32 = 64;
 
-// Opaque to W-C; W-B owns the fields.
+// Opaque outside the renderer modules.
 export struct MythicRenderer {
   fonts: MythicFonts*; images: MythicImages*;
   w: int32; h: int32; tw: int32; th: int32; ntiles: int32;

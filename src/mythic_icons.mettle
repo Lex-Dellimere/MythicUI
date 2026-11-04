@@ -1,4 +1,4 @@
-// mythic_icons (W-C): built-in stroke icons on the 16x16 geometry of DESIGN-SYSTEM §7.1, drawn with
+// mythic_icons: built-in stroke icons on the 16x16 geometry of DESIGN-SYSTEM §7.1, drawn with
 // PATH_STROKE / PATH_FILL (stroke 1.5, round caps and joins; the check and dash use stroke 2).
 import "mythic_base";
 import "mythic_types";

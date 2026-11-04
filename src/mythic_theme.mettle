@@ -1,4 +1,4 @@
-// mythic_theme (W-C): theme data mirroring DESIGN-SYSTEM tokens one to one (DECISIONS §9).
+// mythic_theme: theme data mirroring DESIGN-SYSTEM tokens one to one (DECISIONS §9).
 // Field rule: token name with '.' and '-' replaced by '_'. Values transcribed from DESIGN-SYSTEM.
 // The ui-taking accessors (mythic_set_theme, mythic_theme, mythic_theme_push/pop, mythic_sp) live in
 // mythic_ctx, because MythicUi embeds a MythicTheme and imports this file.

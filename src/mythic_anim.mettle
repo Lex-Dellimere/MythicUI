@@ -1,4 +1,4 @@
-// mythic_anim (W-C): smoothed and timed tweens keyed by hash(id, slot) (DECISIONS §4, DESIGN-SYSTEM §6).
+// mythic_anim: smoothed and timed tweens keyed by hash(id, slot) (DECISIONS §4, DESIGN-SYSTEM §6).
 // MythicTween lives in mythic_ctx (MythicUi owns the tween map).
 import "mythic_base";
 import "mythic_types";

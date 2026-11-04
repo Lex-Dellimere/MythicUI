@@ -1,4 +1,4 @@
-// mythic_raster_path (W-B): signed-area coverage accumulation (font-rs style) for glyphs and
+// mythic_raster_path: signed-area coverage accumulation (font-rs style) for glyphs and
 // paths (DECISIONS §6). Lines and quadratics are accumulated into a float32 buffer; the prefix
 // sum per row with min(1, |acc|) gives nonzero-winding coverage.
 import "mythic_types";

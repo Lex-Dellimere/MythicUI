@@ -1,4 +1,4 @@
-// mythic_plat_headless (W-A): in-memory platform with a virtual clock for tests (DECISIONS §8).
+// mythic_plat_headless: in-memory platform with a virtual clock for tests (DECISIONS §8).
 // Deterministic: wait never blocks, time moves only through mythic_headless_advance_us, getenv
 // always reports "unset". Tests may inspect the recorded state through (MythicHeadless*)p->self.
 import "std/mem";

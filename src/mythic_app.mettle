@@ -1,4 +1,4 @@
-// mythic_app (W-C): window + loop: wait, input, frame callback (with settle passes), layout,
+// mythic_app: window + loop: wait, input, frame callback (with settle passes), layout,
 // paint, render dirty tiles, present (DECISIONS §2, §8).
 import "std/mem";
 import "std/io";

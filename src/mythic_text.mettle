@@ -1,4 +1,4 @@
-// mythic_text (W-B): shaping, measuring, line breaking, emission (DECISIONS §7, Appendix D).
+// mythic_text: shaping, measuring, line breaking, emission (DECISIONS §7, Appendix D).
 // All units are device px. Line breaking (MYTHIC_TEXT_WRAP with max_width > 0): break after
 // spaces (spaces at a soft break hang and do not count), after '-', '/' and U+2014, hard break
 // on '\n'; an overlong word breaks between characters. MYTHIC_TEXT_ELLIPSIS with max_width > 0

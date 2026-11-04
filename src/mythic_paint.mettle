@@ -1,6 +1,6 @@
-// mythic_paint (W-C): MythicPainter wraps the draw list + scale + opacity. Painter functions take
+// mythic_paint: MythicPainter wraps the draw list + scale + opacity. Painter functions take
 // logical px, snap rect edges to whole device px, apply the opacity to colors, and call the
-// W-B dl builders, which take device px (DECISIONS §3, §6, §7).
+// dl builders, which take device px (DECISIONS §3, §6, §7).
 import "mythic_base";
 import "mythic_types";
 import "mythic_dl";
@@ -101,7 +101,7 @@ export fn mythic_paint_gradient(p: MythicPainter*, r: MythicRect, radii: MythicC
   mythic_dl_gradient(p->dl, d, dev_radii(p, radii), q0, q1, mythic_paint_color(p, c0), mythic_paint_color(p, c1));
 }
 
-/// Device-px text spec for a logical style (W-B text APIs work in device px, §7).
+/// Device-px text spec for a logical style (the text APIs work in device px, §7).
 export fn mythic_paint_text_spec(scale: float32, style: MythicTextStyle) -> MythicTextSpec {
   var sp: MythicTextSpec = { font: style.font, size_px: style.size * scale, line_height_px: style.line_height * scale,
                            tracking_px: style.tracking * scale, flags: style.flags };

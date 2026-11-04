@@ -1,11 +1,11 @@
-// mythic_image (W-B): image store (premultiplied), ids for IMAGE commands (Appendix D).
+// mythic_image: image store (premultiplied), ids for IMAGE commands (Appendix D).
 // Pixels are kept as premultiplied 0xAARRGGBB. `gen` bumps on update (part of the damage hash
 // from M2, when IMAGE rendering lands).
 import "mythic_types";
 
 export struct MythicImage { w: int32; h: int32; gen: int32; px: uint32*; }
 
-// Opaque to W-C; W-B owns the fields.
+// Opaque outside the renderer modules.
 export struct MythicImages { count: int32; list: MythicVec<MythicImage>; }
 
 export fn mythic_images_create() -> MythicImages* {

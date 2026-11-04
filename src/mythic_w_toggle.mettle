@@ -1,4 +1,4 @@
-// mythic_w_toggle (W-C): checkbox, switch, radio, slider (DESIGN-SYSTEM §7.4–§7.7, motion §6.2).
+// mythic_w_toggle: checkbox, switch, radio, slider (DESIGN-SYSTEM §7.4–§7.7, motion §6.2).
 import "mythic_base";
 import "mythic_types";
 import "mythic_ctx";

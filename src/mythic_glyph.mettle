@@ -1,4 +1,4 @@
-// mythic_glyph (W-B): glyph rasterization + atlas cache (DECISIONS §7).
+// mythic_glyph: glyph rasterization + atlas cache (DECISIONS §7).
 // Key = (font, glyph, size_q = round(size_px*4), xbin 0..3). Bitmaps live in 1024x1024 A8 atlas
 // pages packed with shelves. When more than MYTHIC_ATLAS_MAX_PAGES pages exist at frame begin, the
 // cache is cleared and `gen` is bumped (overflow during a frame just adds a page).

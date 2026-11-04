@@ -1,4 +1,4 @@
-// mythic_plat_x11_keys (W-A): keysym -> MYTHIC_KEY_* and keysym -> Unicode.
+// mythic_plat_x11_keys: keysym -> MYTHIC_KEY_* and keysym -> Unicode.
 // Imported only by mythic_plat_x11 (linux). Latin-1 and the 0x01000000 range are arithmetic; the
 // legacy keysyms (Latin-2..9, Greek, Cyrillic, symbols, ...) use the generated keysym2ucs table.
 import "mythic_types";

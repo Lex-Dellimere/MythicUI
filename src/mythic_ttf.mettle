@@ -1,4 +1,4 @@
-// mythic_ttf (W-B): TrueType parser (head, hhea, hmtx, maxp, cmap 4/12, loca, glyf, kern, OS/2).
+// mythic_ttf: TrueType parser (head, hhea, hmtx, maxp, cmap 4/12, loca, glyf, kern, OS/2).
 // All values are in font units. The font bytes are borrowed and must outlive the MythicTtf.
 import "mythic_types";
 
