@@ -91,6 +91,8 @@ mettle --build app.mettle -o app            # Linux, or Windows with the native 
 scripts/mythic-build --windows app.mettle -o app.exe   # Windows .exe from Linux (needs mingw-w64)
 ```
 
+With [mbuild](https://github.com/Lex-Dellimere/mbuild), `mbuild build` in this repo builds the showcase, and an app can depend on MythicUI with `mb_dep_path("mythic", "<path to MythicUI>")`.
+
 ## Examples
 
 - `examples/showcase` shows what works today: cards, buttons, radio groups, checkboxes, switches, a slider, an animated build progress bar, icons, keyboard focus and a dark mode switch.

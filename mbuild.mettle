@@ -1,0 +1,15 @@
+// MythicUI: the library lives in src/ and is imported as "mythic/mythic".
+// `mbuild build` builds the showcase; Windows builds use scripts/mythic-build --windows.
+import "mbuild/api";
+
+fn project() {
+  mb_package("mythic", "0.1.0");
+  mb_meta("description", "Immediate-mode GUI library for Mettle on Windows and Linux");
+  mb_meta("license", "Apache-2.0");
+  mb_meta("repository", "https://github.com/Lex-Dellimere/MythicUI");
+  mb_import_root("src");
+  mb_bin("showcase", "examples/showcase/showcase.mettle");
+}
+
+fn deps() {
+}
