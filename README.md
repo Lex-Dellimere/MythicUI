@@ -16,7 +16,7 @@ _Coming soon._
 
 - **Windows and Linux from one codebase.** Win32 on Windows, and the X11 protocol spoken directly over a socket on Linux.
 - **It looks good out of the box.** A clean design system (light and dark themes) with Geist Serif for text and Geist Sans for labels and titles, soft shadows, rounded corners and proper focus rings.
-- **Everything is drawn by MythicUI itself** on the CPU: antialiased shapes, shadows, gradients, vector icons and TrueType text. The fonts are built into the library, so apps work on machines with no fonts installed.
+- **Everything is drawn by MythicUI itself:** antialiased shapes, shadows, gradients, vector icons and TrueType text. The fonts are built into the library, so apps work on machines with no fonts installed.
 - **Fast and quiet.** Only the parts of the window that changed get redrawn. A full 1080p repaint takes about 4 to 6 ms, a frame where nothing changed about 0.3 ms, and an idle app uses 0% CPU.
 - **Layout** with rows and columns, padding, gaps, alignment, and fixed, fit, grow and percent sizes. Text can wrap or cut off with an ellipsis.
 - **Widgets:** labels, headings, buttons (primary, secondary, ghost, danger, three sizes, icons), checkboxes, switches, radio buttons, sliders, single-line text inputs (selection, undo, copy and paste, placeholder, error and read-only states), progress bars, cards and panels, separators and icons.
@@ -33,6 +33,9 @@ You need the Mettle compiler. Put a `mettle.deps` file next to your app that poi
 ```
 mythic=path/to/MythicUI/src
 ```
+
+MythicUI draws with OpenGL 3.3 when it can, through Glint (keep it next to MythicUI, or add `glint=path/to/glint/src`), and falls back to its CPU renderer when GL is missing or fails. GL libraries are loaded at run time, so nothing extra is needed to run.
+Set `MYTHIC_RENDERER=cpu` or `MYTHIC_RENDERER=gl` to pick one, or `renderer: MYTHIC_RENDERER_CPU` in the app description.
 
 Then write your app:
 
@@ -87,7 +90,7 @@ mythic_button(ui, "Save"); mythic_tooltip(ui, "Save the settings");
 Build it:
 
 ```sh
-mettle --build app.mettle -o app            # Linux, or Windows with the native compiler
+mettle --build -lc app.mettle -o app        # Linux (-lc: GL is loaded at run time), or Windows with the native compiler
 scripts/mythic-build --windows app.mettle -o app.exe   # Windows .exe from Linux (needs mingw-w64)
 ```
 
@@ -99,14 +102,14 @@ With [mbuild](https://github.com/Lex-Dellimere/mbuild), `mbuild build` in this r
 
 ```sh
 cd examples/showcase
-mettle --build showcase.mettle -o showcase && ./showcase
+mettle --build -lc showcase.mettle -o showcase && ./showcase
 ```
 
 More examples are on the way (see below).
 
 ## How it works
 
-Every frame your function declares the UI. MythicUI lays it out, turns it into a list of draw commands, and only redraws the screen tiles whose commands changed. The platform layer just opens a window, shows the pixels and passes input back. Platform code is behind one small interface, so adding a GPU renderer or another platform later doesn't touch the widgets.
+Every frame your function declares the UI. MythicUI lays it out, turns it into a list of draw commands, and only redraws the screen tiles whose commands changed. The platform layer just opens a window, shows the pixels and passes input back. Platform code is behind one small interface, and the OpenGL and CPU renderers draw the same command list, so neither touches the widgets.
 
 ## Fonts
 

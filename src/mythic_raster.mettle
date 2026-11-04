@@ -810,13 +810,11 @@ fn draw_cmd(r: MythicRenderer*, fb: MythicFramebuffer, dl: MythicDrawList*, ci: 
   }
 }
 
-/// Renders the dirty tiles of `dl` into `fb` and returns the number of dirty rects
-/// (see mythic_renderer_dirty). `force_full` re-renders every tile.
-export fn mythic_renderer_render(r: MythicRenderer*, dl: MythicDrawList*, fb: MythicFramebuffer, force_full: bool) -> int32 {
+// pass 1: command boxes, tile hashes and bin counts; marks the dirty tiles and returns their count
+fn damage_pass(r: MythicRenderer*, dl: MythicDrawList*, fw: int32, fh: int32, force_full: bool) -> int32 {
   var force: bool = force_full;
-  if (fb.w != r->w || fb.h != r->h || r->hash_a == 0) { resize(r, fb.w, fb.h); force = true; }
+  if (fw != r->w || fh != r->h || r->hash_a == 0) { resize(r, fw, fh); force = true; }
   if (!r->have_prev) { force = true; }
-  if (r->shadows.bytes > MYTHIC_SHADOW_CACHE_MAX) { mythic_shadow_cache_clear(&r->shadows); }
   var T: int32 = MYTHIC_TILE;
   var tw: int32 = r->tw;
   var nt: int32 = r->ntiles;
@@ -826,7 +824,6 @@ export fn mythic_renderer_render(r: MythicRenderer*, dl: MythicDrawList*, fb: My
   r->tile_start[nt] = 0;
   mythic_vec_clear<MythicRectI>(&r->boxes);
   var ncmd: int32 = (int32)dl->cmds.len;
-  // pass 1: boxes, hashes, bin counts
   for ci: int32 in 0..ncmd {
     var c: MythicCmd* = &dl->cmds.data[(int64)ci];
     var b: MythicRectI = cmd_box(r, dl, c);
@@ -843,49 +840,23 @@ export fn mythic_renderer_render(r: MythicRenderer*, dl: MythicDrawList*, fb: My
       }
     }
   }
-  for i: int32 in 0..nt { r->tile_start[i + 1] += r->tile_start[i]; r->tile_fill[i] = r->tile_start[i]; }
-  mythic_vec_reserve<int32>(&r->bins, (int64)r->tile_start[nt] + 1);
-  r->bins.len = (int64)r->tile_start[nt];
-  // pass 2: fill bins in command order
-  for ci: int32 in 0..ncmd {
-    var b: MythicRectI = r->boxes.data[(int64)ci];
-    if (b.x >= b.w || b.y >= b.h) { continue; }
-    var tx0: int32 = b.x / T; var tx1: int32 = (b.w - 1) / T;
-    var ty0: int32 = b.y / T; var ty1: int32 = (b.h - 1) / T;
-    for ty: int32 in ty0..ty1 + 1 {
-      for tx: int32 in tx0..tx1 + 1 {
-        var ti: int32 = ty * tw + tx;
-        r->bins.data[(int64)r->tile_fill[ti]] = ci;
-        r->tile_fill[ti] += 1;
-      }
-    }
-  }
-  // render dirty tiles
   var ndirty: int32 = 0;
   for ti: int32 in 0..nt {
-    var d: bool = force || cur[ti] != prev[ti];
     r->dirty_tiles[ti] = (uint8)0;
-    if (!d) { continue; }
-    r->dirty_tiles[ti] = (uint8)1;
-    ndirty = ndirty + 1;
-    var tb: MythicRectI;
-    tb.x = (ti % tw) * T; tb.y = (ti / tw) * T;
-    tb.w = mythic_mini(tb.x + T, fb.w); tb.h = mythic_mini(tb.y + T, fb.h);
-    var s: int32 = r->tile_start[ti];
-    var e: int32 = r->tile_start[ti + 1];
-    if (s == e) {
-      for y: int32 in tb.y..tb.h {
-        var row: uint32* = fb.px + (int64)y * (int64)fb.stride;
-        for x: int32 in tb.x..tb.w { row[x] = (uint32)0xFF000000; }
-      }
-    }
-    for k: int32 in s..e { draw_cmd(r, fb, dl, r->bins.data[(int64)k], tb); }
+    if (force || cur[ti] != prev[ti]) { r->dirty_tiles[ti] = (uint8)1; ndirty = ndirty + 1; }
   }
+  return ndirty;
+}
+
+// swaps the tile hashes and merges dirty tiles: horizontal runs, then vertically equal runs
+fn damage_finish(r: MythicRenderer*, ndirty: int32) -> int32 {
+  var T: int32 = MYTHIC_TILE;
+  var tw: int32 = r->tw;
   r->stat_tiles = ndirty;
+  var cur: uint64* = r->hash_b;
+  r->hash_b = r->hash_a;
   r->hash_a = cur;
-  r->hash_b = prev;
   r->have_prev = true;
-  // merge dirty tiles: horizontal runs, then vertically equal runs
   mythic_vec_clear<MythicRectI>(&r->dirty);
   var row_begin: int64 = 0;
   for ty: int32 in 0..r->th {
@@ -896,9 +867,9 @@ export fn mythic_renderer_render(r: MythicRenderer*, dl: MythicDrawList*, fb: My
       var sx: int32 = tx;
       while (tx < tw && r->dirty_tiles[ty * tw + tx] != (uint8)0) { tx = tx + 1; }
       var rx: int32 = sx * T;
-      var rw: int32 = mythic_mini(tx * T, fb.w) - rx;
+      var rw: int32 = mythic_mini(tx * T, r->w) - rx;
       var ry: int32 = ty * T;
-      var rh: int32 = mythic_mini(ry + T, fb.h) - ry;
+      var rh: int32 = mythic_mini(ry + T, r->h) - ry;
       var merged: bool = false;
       var q: int64 = row_begin;
       while (q < this_row) {
@@ -918,6 +889,62 @@ export fn mythic_renderer_render(r: MythicRenderer*, dl: MythicDrawList*, fb: My
   }
   return (int32)r->dirty.len;
 }
+
+/// Renders the dirty tiles of `dl` into `fb` and returns the number of dirty rects
+/// (see mythic_renderer_dirty). `force_full` re-renders every tile.
+export fn mythic_renderer_render(r: MythicRenderer*, dl: MythicDrawList*, fb: MythicFramebuffer, force_full: bool) -> int32 {
+  if (r->shadows.bytes > MYTHIC_SHADOW_CACHE_MAX) { mythic_shadow_cache_clear(&r->shadows); }
+  var ndirty: int32 = damage_pass(r, dl, fb.w, fb.h, force_full);
+  var T: int32 = MYTHIC_TILE;
+  var tw: int32 = r->tw;
+  var nt: int32 = r->ntiles;
+  var ncmd: int32 = (int32)dl->cmds.len;
+  for i: int32 in 0..nt { r->tile_start[i + 1] += r->tile_start[i]; r->tile_fill[i] = r->tile_start[i]; }
+  mythic_vec_reserve<int32>(&r->bins, (int64)r->tile_start[nt] + 1);
+  r->bins.len = (int64)r->tile_start[nt];
+  // pass 2: fill bins in command order
+  for ci: int32 in 0..ncmd {
+    var b: MythicRectI = r->boxes.data[(int64)ci];
+    if (b.x >= b.w || b.y >= b.h) { continue; }
+    var tx0: int32 = b.x / T; var tx1: int32 = (b.w - 1) / T;
+    var ty0: int32 = b.y / T; var ty1: int32 = (b.h - 1) / T;
+    for ty: int32 in ty0..ty1 + 1 {
+      for tx: int32 in tx0..tx1 + 1 {
+        var ti: int32 = ty * tw + tx;
+        r->bins.data[(int64)r->tile_fill[ti]] = ci;
+        r->tile_fill[ti] += 1;
+      }
+    }
+  }
+  // render dirty tiles
+  for ti: int32 in 0..nt {
+    if (r->dirty_tiles[ti] == (uint8)0) { continue; }
+    var tb: MythicRectI;
+    tb.x = (ti % tw) * T; tb.y = (ti / tw) * T;
+    tb.w = mythic_mini(tb.x + T, fb.w); tb.h = mythic_mini(tb.y + T, fb.h);
+    var s: int32 = r->tile_start[ti];
+    var e: int32 = r->tile_start[ti + 1];
+    if (s == e) {
+      for y: int32 in tb.y..tb.h {
+        var row: uint32* = fb.px + (int64)y * (int64)fb.stride;
+        for x: int32 in tb.x..tb.w { row[x] = (uint32)0xFF000000; }
+      }
+    }
+    for k: int32 in s..e { draw_cmd(r, fb, dl, r->bins.data[(int64)k], tb); }
+  }
+  return damage_finish(r, ndirty);
+}
+
+/// Damage only: computes the command boxes (mythic_renderer_box), tile hashes and dirty rects of
+/// `dl` for a w x h target without drawing anything. Returns the number of dirty rects. For
+/// renderers that draw the list another way (mythic_render_gl).
+export fn mythic_renderer_damage(r: MythicRenderer*, dl: MythicDrawList*, w: int32, h: int32, force_full: bool) -> int32 {
+  return damage_finish(r, damage_pass(r, dl, w, h, force_full));
+}
+
+/// Device box of command `ci` from the last render or damage call: x0, y0, x1, y1 in the
+/// x, y, w, h fields (empty when x0 >= x1), already cut by its clip and the screen.
+export fn mythic_renderer_box(r: MythicRenderer*, ci: int32) -> MythicRectI { return r->boxes.data[(int64)ci]; }
 
 fn ry_end(ty: int32, T: int32) -> int32 { return (ty + 1) * T; }
 

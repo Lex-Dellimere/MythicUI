@@ -12,6 +12,7 @@ import "mythic_image";
 import "mythic_raster_path";
 import "mythic_raster_shadow";
 import "mythic_raster";
+import "mythic_render_gl";
 import "mythic_png";
 import "mythic_plat";
 import "mythic_theme";

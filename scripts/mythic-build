@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build one MythicUI app for Linux (default) or Windows (cross-build with mingw).
 # usage: mythic-build [--windows] [--console] [--release] app.mettle -o out
-#   Linux:   mettle --build app.mettle -o out
+#   Linux:   mettle --build -lc app.mettle -o out (libc for dlopen: Glint loads GL at run time)
 #   Windows: app -> COFF, runtime string.mettle -> COFF (cached in build/winrt/),
 #            linked by x86_64-w64-mingw32-gcc with user32/gdi32/kernel32; -mwindows unless --console.
 # Env: METTLE (compiler path), MINGW_CC (linker).
@@ -36,7 +36,7 @@ mflags=()
 mkdir -p "$(dirname "$out")"
 
 if [ "$windows" = 0 ]; then
-  exec "$METTLE" --build "${mflags[@]}" "$src" -o "$out"
+  exec "$METTLE" --build -lc "${mflags[@]}" "$src" -o "$out"
 fi
 
 command -v "$MINGW_CC" >/dev/null || { echo "mythic-build: $MINGW_CC not found" >&2; exit 2; }

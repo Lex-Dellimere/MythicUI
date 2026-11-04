@@ -9,7 +9,11 @@ fn project() {
   mb_meta("repository", "https://github.com/Lex-Dellimere/MythicUI");
   mb_import_root("src");
   mb_bin("showcase", "examples/showcase/showcase.mettle");
+  mb_on("linux");
+  mb_link_libs("c");          // dlopen: Glint loads libEGL / libGL at run time
+  mb_on("");
 }
 
 fn deps() {
+  mb_dep_path("glint", "../glint");
 }

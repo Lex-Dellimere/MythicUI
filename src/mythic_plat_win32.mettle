@@ -93,6 +93,7 @@ export struct MythicW32 {
   p_get_dpi_for_window: int64;
   scale_forced: bool;
   min_lw: int32; min_lh: int32;      // logical min size, re-scaled on WM_DPICHANGED
+  gl: bool;                          // a GL context will own the window (mythic_plat_gl_prepare)
 }
 
 var g_mythic_w32: MythicW32* = 0;
@@ -496,6 +497,7 @@ fn w32_open(self: rawptr, desc: MythicWindowDesc*) -> int32 {
   var wc: W32WndClassExW;
   wc.cb_size = 80;
   wc.style = 3;                  // CS_HREDRAW | CS_VREDRAW
+  if (w->gl) { wc.style = wc.style | (uint32)32; }   // CS_OWNDC: GL keeps one DC for the window's life
   wc.wnd_proc = &w32_wnd_proc;
   wc.instance = w->instance;
   wc.class_name = cls;
@@ -505,6 +507,7 @@ fn w32_open(self: rawptr, desc: MythicWindowDesc*) -> int32 {
   }
   w->style = (uint32)W32_STYLE;
   if (!desc->resizable) { w->style = w->style & ~(uint32)0x50000; }   // no THICKFRAME / MAXIMIZEBOX
+  if (w->gl) { w->style = w->style | (uint32)0x06000000; }            // CLIPCHILDREN | CLIPSIBLINGS
   var cw: int32 = (int32)((float32)desc->width * w->scale + 0.5);
   var ch: int32 = (int32)((float32)desc->height * w->scale + 0.5);
   w->min_w = (int32)((float32)desc->min_width * w->scale + 0.5);
@@ -771,3 +774,23 @@ export fn mythic_plat_native_create() -> MythicPlatform* {
   p->getenv = &w32_getenv;
   return p;
 }
+
+/// GL (mythic_app): give the window class CS_OWNDC. Call before open. False when `p` is not
+/// this platform. The visual arguments are for X11 and ignored here.
+export fn mythic_plat_gl_prepare(p: MythicPlatform*, visual: int64, depth: int32) -> bool {
+  if (p == 0 || p->open != &w32_open) { return false; }
+  var w: MythicW32* = (MythicW32*)p->self;
+  w->gl = true;
+  return true;
+}
+
+/// The HWND a GL context draws into (0 when `p` is not this platform or not open).
+export fn mythic_plat_gl_handle(p: MythicPlatform*) -> int64 {
+  if (p == 0 || p->open != &w32_open) { return 0; }
+  var w: MythicW32* = (MythicW32*)p->self;
+  if (!w->opened) { return 0; }
+  return w->hwnd;
+}
+
+/// The process environment, whatever the platform object (malloc'd, nul-terminated value).
+export fn mythic_plat_env(name: uint8*, n: int64, out: MythicBytes*) -> bool { return w32_getenv((rawptr)0, name, n, out); }

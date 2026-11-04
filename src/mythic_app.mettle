@@ -14,10 +14,19 @@ import "mythic_theme";
 import "mythic_ctx";
 import "mythic_layout";
 import "mythic_paint";
+import "mythic_render_gl";
+import "glint/glint";
 
 export struct MythicAppDesc { title: string; width: float32; height: float32; min_width: float32;
                             min_height: float32; dark: bool;   // 0 sizes => 960x640, min 480x360
-                            reduced_motion: bool; }             // movement snaps, color fades <= 80 ms
+                            reduced_motion: bool;               // movement snaps, color fades <= 80 ms
+                            renderer: int32; }                  // MYTHIC_RENDERER_*; env MYTHIC_RENDERER=cpu|gl wins
+
+// AUTO: OpenGL on native windows when it works, else the CPU renderer; headless apps use the CPU
+// renderer unless GL is asked for. A GL request that fails also falls back to the CPU.
+export const MYTHIC_RENDERER_AUTO: int32 = 0;
+export const MYTHIC_RENDERER_CPU: int32 = 1;
+export const MYTHIC_RENDERER_GL: int32 = 2;
 
 export struct MythicApp {
   plat: MythicPlatform*; ui: MythicUi*; renderer: MythicRenderer*; dl: MythicDrawList; headless: bool;
@@ -32,6 +41,7 @@ export struct MythicApp {
   fb_w: int32; fb_h: int32;
   last_dirty: int32;
   exit_code: int32;
+  gl: MythicGLRenderer*; glctx: GlintContext*;   // 0 = CPU renderer
 }
 
 fn env_is_1(p: MythicPlatform*, name: string) -> bool {
@@ -42,6 +52,52 @@ fn env_is_1(p: MythicPlatform*, name: string) -> bool {
   var on: bool = b.len > 0 && b.data[0] != (uint8)48;
   if (b.data != 0) { free((rawptr)b.data); }
   return on;
+}
+
+fn env_eq(name: string, want: string) -> bool {
+  var b: MythicBytes;
+  if (!mythic_plat_env((uint8*)name.chars, (int64)name.length, &b)) { return false; }
+  var same: bool = b.len == (int64)want.length;
+  if (same) { for i: int64 in 0..b.len { if (b.data[i] != (uint8)want[i]) { same = false; } } }
+  free((rawptr)b.data);
+  return same;
+}
+
+fn trace_cstr(c: cstring) {
+  var n: int64 = 0;
+  while (c != 0 && c[n] != (uint8)0 && n < 300) { n = n + 1; }
+  if (n > 0) { fwrite(c, 1, n, get_stdout()); }
+}
+
+fn renderer_line(app: MythicApp*, why: cstring, asked: bool) {
+  var ui: MythicUi* = app->ui;
+  if (app->gl != 0) {
+    if (!ui->trace) { return; }
+    print("trace: renderer gl (");
+    print(glint_backend_name(app->glctx));
+    print(", ");
+    trace_cstr(glGetString(GL_RENDERER));
+    print(", ");
+    trace_cstr(glGetString(GL_VERSION));
+    println(")");
+    return;
+  }
+  if (asked) {
+    print_err("MythicUI: OpenGL unavailable, using the CPU renderer: ");
+    var n: int64 = 0;
+    while (why[n] != (uint8)0 && n < 300) { n = n + 1; }
+    fwrite(why, 1, n, get_stderr());
+    print_err("\n");
+  }
+  if (ui->trace) { print("trace: renderer cpu ("); trace_cstr(why); println(")"); }
+}
+
+fn gl_drop(app: MythicApp*) {
+  mythic_gl_destroy(app->gl);
+  glint_close(app->glctx);
+  app->gl = (MythicGLRenderer*)0;
+  app->glctx = (GlintContext*)0;
+  app->force_full = true;
 }
 
 fn app_create_on(desc: MythicAppDesc, plat: MythicPlatform*, headless: bool, scale: float32) -> MythicApp* {
@@ -55,13 +111,31 @@ fn app_create_on(desc: MythicAppDesc, plat: MythicPlatform*, headless: bool, sca
   var wd: MythicWindowDesc = { title: (uint8*)desc.title.chars, title_len: (int64)desc.title.length,
                              width: mythic_iround(w), height: mythic_iround(h),
                              min_width: mythic_iround(mw), min_height: mythic_iround(mh), resizable: true };
+  // renderer choice: the env var wins over the desc; AUTO means GL except on headless
+  var mode: int32 = desc.renderer;
+  if (env_eq("MYTHIC_RENDERER", "cpu")) { mode = MYTHIC_RENDERER_CPU; }
+  else if (env_eq("MYTHIC_RENDERER", "gl")) { mode = MYTHIC_RENDERER_GL; }
+  var asked: bool = mode == MYTHIC_RENDERER_GL;
+  var want_gl: bool = asked || (mode == MYTHIC_RENDERER_AUTO && !headless);
+  var why: cstring = "asked for";
+  if (mode == MYTHIC_RENDERER_AUTO && headless) { why = "headless default"; }
+  var cfg: GlintConfig = mythic_gl_config();
+  if (want_gl && !headless) {
+    var vid: int64 = 0;
+    var depth: int32 = 0;
+    glint_x11_visual(&cfg, &vid, &depth);       // Linux only; Windows needs no visual
+    if (!mythic_plat_gl_prepare(plat, vid, depth)) {
+      want_gl = false;
+      why = glint_error();
+      if (why[0] == (uint8)0) { why = "the platform has no GL surface"; }
+    }
+  }
   if (plat->open(plat->self, &wd) != 0) { return 0; }
   var app: MythicApp* = new MythicApp;
   app->plat = plat;
   app->headless = headless;
   app->fonts = mythic_fonts_create();
   app->images = mythic_images_create();
-  app->renderer = mythic_renderer_create(app->fonts, app->images);
   var ui: MythicUi* = mythic_ctx_create(plat, app->fonts, app->images, &app->dl);
   app->ui = ui;
   ui->scale = scale;
@@ -71,6 +145,17 @@ fn app_create_on(desc: MythicAppDesc, plat: MythicPlatform*, headless: bool, sca
   ui->reduced_motion = desc.reduced_motion || env_is_1(plat, "MYTHIC_REDUCED_MOTION");
   ui->trace = env_is_1(plat, "MYTHIC_TRACE");
   ui->debug = env_is_1(plat, "MYTHIC_DEBUG");
+  if (want_gl) {
+    if (headless) { app->glctx = glint_open_headless(ui->dev_w, ui->dev_h, &cfg); }
+    else { app->glctx = glint_open_existing(mythic_plat_gl_handle(plat), &cfg); }
+    if (app->glctx == 0) { why = glint_error(); }
+    else {
+      app->gl = mythic_gl_create(app->glctx, app->fonts, app->images, headless);
+      if (app->gl == 0) { why = mythic_gl_error(); glint_close(app->glctx); app->glctx = (GlintContext*)0; }
+    }
+  }
+  if (app->gl == 0) { app->renderer = mythic_renderer_create(app->fonts, app->images); }
+  if (want_gl || ui->trace) { renderer_line(app, why, asked); }
   app->running = true;
   app->first = true;
   app->force_full = true;
@@ -97,14 +182,38 @@ fn run_frame(app: MythicApp*, mythic_frame_cb: fn(MythicUi*, rawptr) -> void, ud
   if (ui->quit) { app->running = false; }
   mythic_ctx_frame_end(ui);
 
-  var fb: MythicFramebuffer = plat->framebuffer(plat->self);
+  // a GL window draws straight to its surface; CPU and headless GL go through the framebuffer
+  var fb: MythicFramebuffer;
+  if (app->gl != 0 && !app->headless) {
+    fb.w = mythic_maxi(ui->dev_w, 1); fb.h = mythic_maxi(ui->dev_h, 1);
+  } else {
+    fb = plat->framebuffer(plat->self);
+  }
   if (fb.w != app->fb_w || fb.h != app->fb_h) { app->force_full = true; app->fb_w = fb.w; app->fb_h = fb.h; }
   if (fb.w > 0) { ui->dev_w = fb.w; ui->dev_h = fb.h; }
   mythic_dl_clear(&app->dl, fb.w, fb.h);
   var painter: MythicPainter = { dl: &app->dl, fonts: app->fonts, scale: ui->scale, opacity: 1.0, arena: ui->arena };
   mythic_lay_paint(ui, &painter);
   var n: int32 = 0;
-  if (fb.px != 0) {
+  if (app->gl != 0) {
+    n = mythic_gl_render(app->gl, &app->dl, fb.w, fb.h, app->force_full);
+    if (n < 0) {
+      renderer_line_drop(app);
+      gl_drop(app);
+      app->renderer = mythic_renderer_create(app->fonts, app->images);
+      fb = plat->framebuffer(plat->self);
+      n = 0;
+    } else if (n > 0 && app->headless) {
+      if (app->force_full) {
+        mythic_gl_read(app->gl, fb, (MythicRectI*)0, 0);
+        plat->present(plat->self, (MythicRectI*)0, 0);
+      } else {
+        mythic_gl_read(app->gl, fb, mythic_gl_dirty(app->gl), n);
+        plat->present(plat->self, mythic_gl_dirty(app->gl), n);
+      }
+    }
+  }
+  if (app->gl == 0 && fb.px != 0) {
     n = mythic_renderer_render(app->renderer, &app->dl, fb, app->force_full);
     if (app->force_full) { plat->present(plat->self, (MythicRectI*)0, 0); }
     else if (n > 0) { plat->present(plat->self, mythic_renderer_dirty(app->renderer), n); }
@@ -144,8 +253,16 @@ fn pump(app: MythicApp*) -> bool {
   }
   var now: int64 = plat->now_us(plat->self);
   if (ui->next_frame_us > 0 && now >= ui->next_frame_us) { need = true; }
-  if (!need && expose) { plat->present(plat->self, (MythicRectI*)0, 0); }
+  if (!need && expose) {
+    if (app->gl != 0 && !app->headless) { mythic_gl_render(app->gl, &app->dl, app->fb_w, app->fb_h, true); }
+    else { plat->present(plat->self, (MythicRectI*)0, 0); }
+  }
   return need;
+}
+
+fn renderer_line_drop(app: MythicApp*) {
+  print_err("MythicUI: the first OpenGL frame failed, using the CPU renderer\n");
+  if (app->ui->trace) { println("trace: renderer cpu (the first GL frame failed)"); }
 }
 
 fn app_refresh(p: rawptr) {
@@ -212,12 +329,30 @@ export fn mythic_app_ui(app: MythicApp*) -> MythicUi* { return app->ui; }
 export fn mythic_app_frames(app: MythicApp*) -> int64 { return app->frames; }
 export fn mythic_app_framebuffer(app: MythicApp*) -> MythicFramebuffer { return app->plat->framebuffer(app->plat->self); }
 export fn mythic_app_save_png(app: MythicApp*, path: string) -> bool {
+  if (app->gl != 0 && !app->headless) {
+    var w: int32 = app->fb_w; var h: int32 = app->fb_h;
+    if (w <= 0 || h <= 0) { return false; }
+    var px: uint32* = (uint32*)malloc((int64)w * (int64)h * 4);
+    var shot: MythicFramebuffer = { px: px, w: w, h: h, stride: w };
+    mythic_gl_snapshot(app->gl, &app->dl, shot);
+    var ok: bool = mythic_png_write(path, px, w, h, w);
+    free((rawptr)px);
+    return ok;
+  }
   var fb: MythicFramebuffer = mythic_app_framebuffer(app);
   if (fb.px == 0) { return false; }
   return mythic_png_write(path, fb.px, fb.w, fb.h, fb.stride);
 }
+
+/// The renderer in use: MYTHIC_RENDERER_GL or MYTHIC_RENDERER_CPU.
+export fn mythic_app_renderer(app: MythicApp*) -> int32 {
+  if (app->gl != 0) { return MYTHIC_RENDERER_GL; }
+  return MYTHIC_RENDERER_CPU;
+}
 export fn mythic_app_destroy(app: MythicApp*) {
   if (app == 0) { return; }
+  // before the window goes; with the display gone, leave GL alone (Xlib exits on any IO error)
+  if (app->gl != 0 && !app->ui->close_forced) { gl_drop(app); }
   app->plat->close(app->plat->self);
   mythic_ctx_destroy(app->ui);
   mythic_renderer_destroy(app->renderer);

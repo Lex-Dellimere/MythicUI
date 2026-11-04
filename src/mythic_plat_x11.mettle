@@ -44,6 +44,7 @@ export struct MythicX11 {
   a_clipboard: int64; a_targets: int64; a_text: int64; a_incr: int64; a_sel: int64;
   clip: uint8*; clip_len: int64; own_clip: bool; own_primary: bool; own_time: int64;
   last_time: int64;                 // server time of the newest input event
+  gl_visual: int64; gl_depth: int64;  // window visual for GL (mythic_plat_gl_prepare); 0 = root visual
 }
 
 // ---------- byte packing (little-endian; we send 'l') ----------
@@ -973,19 +974,38 @@ fn x11_open(self: rawptr, desc: MythicWindowDesc*) -> int32 {
   x->a_sel = intern_atom(x, "MYTHIC_SEL", false);
 
   x->win = new_id(x);
-  var r: uint8[44];
-  zero(&r[0], 44);
-  wr8(&r[0], 0, 1); wr8(&r[0], 1, x->depth); wr16(&r[0], 2, 11);
+  var r: uint8[52];
+  zero(&r[0], 52);
+  if (x->gl_visual != 0 && x->gl_visual != x->visual) {
+    // GL wants another visual: the window needs its own colormap and a border pixel
+    var cmap: int64 = new_id(x);
+    var cm: uint8[16];
+    wr8(&cm[0], 0, 78); wr8(&cm[0], 1, 0); wr16(&cm[0], 2, 4);     // CreateColormap, alloc None
+    wr32(&cm[0], 4, cmap); wr32(&cm[0], 8, x->root); wr32(&cm[0], 12, x->gl_visual);
+    send_req(x, &cm[0], 16);
+    x->visual = x->gl_visual;
+    x->depth = x->gl_depth;
+    wr16(&r[0], 2, 13);
+    wr32(&r[0], 28, 1 | 8 | 16 | 2048 | 8192);   // back-pixmap | border-pixel | bit-gravity | event-mask | colormap
+    wr32(&r[0], 32, 0);
+    wr32(&r[0], 36, 0);
+    wr32(&r[0], 40, 1);
+    wr32(&r[0], 44, X_EVENT_MASK);
+    wr32(&r[0], 48, cmap);
+  } else {
+    wr16(&r[0], 2, 11);
+    wr32(&r[0], 28, 1 | 16 | 2048);          // back-pixmap | bit-gravity | event-mask
+    wr32(&r[0], 32, 0);                      // background None
+    wr32(&r[0], 36, 1);                      // NorthWest
+    wr32(&r[0], 40, X_EVENT_MASK);
+  }
+  wr8(&r[0], 0, 1); wr8(&r[0], 1, x->depth);
   wr32(&r[0], 4, x->win); wr32(&r[0], 8, x->root);
   wr16(&r[0], 12, 100); wr16(&r[0], 14, 100);
   wr16(&r[0], 16, (int64)w); wr16(&r[0], 18, (int64)h);
   wr16(&r[0], 20, 0); wr16(&r[0], 22, 1);
   wr32(&r[0], 24, x->visual);
-  wr32(&r[0], 28, 1 | 16 | 2048);          // back-pixmap | bit-gravity | event-mask
-  wr32(&r[0], 32, 0);                      // background None
-  wr32(&r[0], 36, 1);                      // NorthWest
-  wr32(&r[0], 40, X_EVENT_MASK);
-  send_req(x, &r[0], 44);
+  send_req(x, &r[0], rd16(&r[0], 2) * 4);
 
   set_title_props(x, desc->title, desc->title_len);
   var cls: string = "mythic";
@@ -1465,3 +1485,24 @@ export fn mythic_plat_native_create() -> MythicPlatform* {
   p->getenv = &x11_getenv;
   return p;
 }
+
+/// GL (mythic_app): open the window with this visual and depth (from glint_x11_visual) instead
+/// of the root visual. Call before open. False when `p` is not this platform or there is no visual.
+export fn mythic_plat_gl_prepare(p: MythicPlatform*, visual: int64, depth: int32) -> bool {
+  if (p == 0 || p->open != &x11_open || visual == 0) { return false; }
+  var x: MythicX11* = (MythicX11*)p->self;
+  x->gl_visual = visual;
+  x->gl_depth = (int64)depth;
+  return true;
+}
+
+/// The X11 window id a GL context draws into (0 when `p` is not this platform or not open).
+export fn mythic_plat_gl_handle(p: MythicPlatform*) -> int64 {
+  if (p == 0 || p->open != &x11_open) { return 0; }
+  var x: MythicX11* = (MythicX11*)p->self;
+  if (!x->opened) { return 0; }
+  return x->win;
+}
+
+/// The process environment, whatever the platform object (malloc'd, nul-terminated value).
+export fn mythic_plat_env(name: uint8*, n: int64, out: MythicBytes*) -> bool { return mythic_x11_getenv(name, n, out); }
