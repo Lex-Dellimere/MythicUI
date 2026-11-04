@@ -247,16 +247,17 @@ fn colors_dark() -> MythicColors {
 // DESIGN-SYSTEM §3.3 / §4 / §6.2 values shared by both themes.
 fn theme_common() -> MythicTheme {
   var t: MythicTheme;
+  // Geist Serif is set at its own spacing (no tracking); the weight roles share one face.
   t.type.caption = ts(MYTHIC_FONT_REGULAR, 12.0, 16.0, 0.0);
   t.type.caption_strong = ts(MYTHIC_FONT_MEDIUM, 12.0, 16.0, 0.0);
-  t.type.body = ts(MYTHIC_FONT_REGULAR, 14.0, 20.0, -0.09);
-  t.type.body_strong = ts(MYTHIC_FONT_SEMIBOLD, 14.0, 20.0, -0.09);
-  t.type.label = ts(MYTHIC_FONT_MEDIUM, 14.0, 20.0, -0.09);
-  t.type.label_sm = ts(MYTHIC_FONT_MEDIUM, 13.0, 16.0, -0.04);
-  t.type.title = ts(MYTHIC_FONT_SEMIBOLD, 16.0, 24.0, -0.18);
-  t.type.heading = ts(MYTHIC_FONT_SEMIBOLD, 20.0, 28.0, -0.33);
-  t.type.display = ts(MYTHIC_FONT_SEMIBOLD, 28.0, 36.0, -0.59);
-  t.type.mono = ts(MYTHIC_FONT_MONO, 13.0, 20.0, 0.0);
+  t.type.body = ts(MYTHIC_FONT_REGULAR, 14.0, 20.0, 0.0);
+  t.type.body_strong = ts(MYTHIC_FONT_SEMIBOLD, 14.0, 20.0, 0.0);
+  t.type.label = ts(MYTHIC_FONT_MEDIUM, 14.0, 20.0, 0.0);
+  t.type.label_sm = ts(MYTHIC_FONT_MEDIUM, 13.0, 16.0, 0.0);
+  t.type.title = ts(MYTHIC_FONT_SEMIBOLD, 16.0, 24.0, 0.0);
+  t.type.heading = ts(MYTHIC_FONT_SEMIBOLD, 20.0, 28.0, 0.0);
+  t.type.display = ts(MYTHIC_FONT_SEMIBOLD, 28.0, 36.0, 0.0);
+  t.type.mono = ts(MYTHIC_FONT_MONO, 13.0, 20.0, 0.0);      // or MYTHIC_FONT_MONO_ALT (IBM Plex Mono)
   t.radius.xs = 2.0; t.radius.sm = 4.0; t.radius.md = 6.0; t.radius.lg = 8.0; t.radius.xl = 12.0;
   var m: MythicMotion* = &t.motion;
   m->hover_in_tau = 25.0; m->hover_out_tau = 50.0; m->press_in_tau = 15.0; m->press_out_tau = 40.0;

@@ -1,15 +1,19 @@
-// mythic_fonts (W-B): font registry; embeds the 4 shipped faces (DECISIONS §7, Appendix D).
+// mythic_fonts: font registry; embeds the shipped faces (DECISIONS §7, Appendix D).
 // Also owns the glyph cache and the per-frame text arenas used by mythic_text.
 import "mythic_types";
 import "mythic_ttf";
 import "mythic_glyph";
 
-var g_mythic_font_regular: string = import_str "../assets/fonts/Inter-Regular.ttf";
-var g_mythic_font_medium: string = import_str "../assets/fonts/Inter-Medium.ttf";
-var g_mythic_font_semibold: string = import_str "../assets/fonts/Inter-SemiBold.ttf";
-var g_mythic_font_mono: string = import_str "../assets/fonts/JetBrainsMono-Regular.ttf";
+// Second built-in monospace: IBM Plex Mono, embedded renamed as "Mythic Mono Alt" (OFL §3,
+// Reserved Font Name "Plex"). Pick it with `theme.type.mono.font = MYTHIC_FONT_MONO_ALT`.
+export const MYTHIC_FONT_MONO_ALT: int32 = 4;
 
-// Opaque to W-C; W-B owns the fields.
+// Geist Serif ships one weight, so the regular, medium and semibold roles share one face.
+var g_mythic_font_serif: string = import_str "../assets/fonts/GeistSerif-Regular.ttf";
+var g_mythic_font_mono: string = import_str "../assets/fonts/JetBrainsMono-Regular.ttf";
+var g_mythic_font_mono_alt: string = import_str "../assets/fonts/MythicMonoAlt-Regular.ttf";
+
+// Opaque outside the text modules.
 export struct MythicFonts {
   count: int32; frame: int64;
   ttfs: MythicVec<MythicTtf>;
@@ -36,16 +40,16 @@ fn add_str(f: MythicFonts*, s: string) -> int32 {
   return mythic_fonts_add(f, (uint8*)s.chars, (int64)s.length);
 }
 
-export fn mythic_fonts_create() -> MythicFonts* {          // registers the 4 embedded faces as ids 0..3
+export fn mythic_fonts_create() -> MythicFonts* {          // registers the embedded faces as ids 0..4
   var f: MythicFonts* = new MythicFonts;
-  var r: string = g_mythic_font_regular;
-  var m: string = g_mythic_font_medium;
-  var sb: string = g_mythic_font_semibold;
+  var se: string = g_mythic_font_serif;
   var mo: string = g_mythic_font_mono;
-  add_str(f, r);
-  add_str(f, m);
-  add_str(f, sb);
+  var ma: string = g_mythic_font_mono_alt;
+  add_str(f, se);
+  add_str(f, se);
+  add_str(f, se);
   add_str(f, mo);
+  add_str(f, ma);
   return f;
 }
 

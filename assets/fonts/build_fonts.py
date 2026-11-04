@@ -2,22 +2,30 @@
 """Reproducible build of MythicUI's embedded fonts (requires fontTools >= 4.40).
 
 Inputs (official upstream releases, OFL-1.1):
-  Inter 4.1          https://github.com/rsms/inter/releases/download/v4.1/Inter-4.1.zip
-                     -> extras/ttf/Inter-{Regular,Medium,SemiBold}.ttf
+  Geist Serif 1.001  https://github.com/vercel/geist-font/releases/download/v1.9.0/geist-font-v1.9.0.zip
+  (release v1.9.0)   -> geist-font/GeistSerif/ttf/GeistSerif-Regular.ttf
+  IBM Plex Mono 2.005 https://github.com/IBM/plex/releases/download/%40ibm%2Fplex-mono%402.5.0/ibm-plex-mono.zip
+  (@ibm/plex-mono@2.5.0) -> ibm-plex-mono/fonts/complete/ttf/IBMPlexMono-Regular.ttf
   JetBrains Mono 2.304 https://github.com/JetBrains/JetBrainsMono/releases/download/v2.304/JetBrainsMono-2.304.zip
                      -> fonts/ttf/JetBrainsMono-Regular.ttf
 
-What this does to each font (permitted by OFL-1.1 section 3; neither font declares
-a Reserved Font Name):
+Geist Serif ships one weight (Regular 400). Its variable font has a shape axis (ELSH) only,
+no weight axis, so there are no Medium/SemiBold instances to make; the static Regular
+(default round-dot shape) is used as is.
+
+What this does to each font (permitted by OFL-1.1 section 3):
   * subsets to the Unicode ranges in UNICODES (Latin, Greek, Cyrillic, punctuation,
     currency, arrows, common symbols) - MythicUI does no complex shaping (AC: out of scope)
   * removes TrueType hinting bytecode (fpgm/prep/cvt) - MythicUI's rasterizer is unhinted
-  * removes GSUB/GPOS/GDEF and, for Inter, replaces GPOS pair kerning with a flat
+  * removes GSUB/GPOS/GDEF and, for Geist Serif, replaces GPOS pair kerning with a flat
     legacy 'kern' table (version 0, one format-0 subtable, horizontal) so the engine
-    only needs the trivial format-0 binary search for kerning
+    only needs the trivial format-0 binary search for kerning (both monos have no kerning)
   * glyph outlines stay 'glyf' quadratic TrueType; metrics tables unchanged
+  * IBM Plex Mono declares the Reserved Font Name "Plex", so the modified font is renamed
+    "Mythic Mono Alt" (OFL section 3). Geist Serif and JetBrains Mono declare none and
+    keep their names.
 
-Usage: python3 build_fonts.py <inter_ttf_dir> <jetbrains_ttf_dir> <out_dir>
+Usage: python3 build_fonts.py <GeistSerif-Regular.ttf> <IBMPlexMono-Regular.ttf> <JetBrainsMono-Regular.ttf> <out_dir>
 """
 import sys, os
 from fontTools.ttLib import TTFont, newTable
@@ -140,8 +148,9 @@ def strip_layout(font):
 
 
 def add_kern(font, pairs):
-    # drop imperceptible pairs (< 16/2048 em = 0.1 px at 13 px)
-    pairs = {k: v for k, v in pairs.items() if abs(v) >= 16}
+    # drop imperceptible pairs (< 1/128 em = 0.1 px at 13 px)
+    lim = font['head'].unitsPerEm / 128
+    pairs = {k: v for k, v in pairs.items() if abs(v) >= lim}
     if len(pairs) > 10920:
         # one format-0 subtable must stay < 64 KiB: keep ASCII-ASCII pairs first, then
         # pairs touching Latin-1/Latin Ext-A, then the rest; strongest first within a tier
@@ -172,22 +181,41 @@ def add_kern(font, pairs):
     return len(pairs)
 
 
-def main():
-    inter_dir, jbm_dir, out = sys.argv[1:4]
-    os.makedirs(out, exist_ok=True)
-    for w in ('Regular', 'Medium', 'SemiBold'):
-        f = do_subset(os.path.join(inter_dir, f'Inter-{w}.ttf'), True)
-        pairs = flatten_kern(f)
-        strip_layout(f)
-        n = add_kern(f, pairs)
-        dst = os.path.join(out, f'Inter-{w}.ttf')
-        f.save(dst)
-        print(dst, os.path.getsize(dst), 'bytes,', len(f.getGlyphOrder()), 'glyphs,', n, 'kern pairs')
-    f = do_subset(os.path.join(jbm_dir, 'JetBrainsMono-Regular.ttf'), False)
-    strip_layout(f)
-    dst = os.path.join(out, 'JetBrainsMono-Regular.ttf')
+# OFL section 3: a modified font may not use a Reserved Font Name.
+RENAME = {'IBM Plex Mono': 'Mythic Mono Alt', 'IBMPlexMono': 'MythicMonoAlt'}
+NAME_IDS = (1, 3, 4, 6, 16, 17, 18, 21, 22, 25)
+
+
+def rename(font):
+    for r in font['name'].names:
+        if r.nameID in NAME_IDS:
+            v = r.toUnicode()
+            for a, b in RENAME.items():
+                v = v.replace(a, b)
+            r.string = v
+
+
+def save(f, dst, n=None):
     f.save(dst)
-    print(dst, os.path.getsize(dst), 'bytes,', len(f.getGlyphOrder()), 'glyphs')
+    k = '' if n is None else f', {n} kern pairs'
+    print(dst, os.path.getsize(dst), 'bytes,', len(f.getGlyphOrder()), f'glyphs{k}')
+
+
+def main():
+    serif, plex, jbm, out = sys.argv[1:5]
+    os.makedirs(out, exist_ok=True)
+    f = do_subset(serif, True)
+    pairs = flatten_kern(f)
+    strip_layout(f)
+    n = add_kern(f, pairs)
+    save(f, os.path.join(out, 'GeistSerif-Regular.ttf'), n)
+    f = do_subset(plex, False)
+    strip_layout(f)
+    rename(f)
+    save(f, os.path.join(out, 'MythicMonoAlt-Regular.ttf'))
+    f = do_subset(jbm, False)
+    strip_layout(f)
+    save(f, os.path.join(out, 'JetBrainsMono-Regular.ttf'))
 
 
 if __name__ == '__main__':

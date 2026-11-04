@@ -111,7 +111,7 @@ fn settings_card(ui: MythicUi*, app: App*) {
     mythic_switch(ui, "Desktop notifications", &app->notify);
     mythic_switch(ui, "Save on build", &app->autosave);
     mythic_separator(ui);
-    mythic_label_ex(ui, "Everything here is drawn by MythicUI itself on the CPU: rounded corners, soft shadows, icons and Inter text, with no toolkit underneath.", { role: MYTHIC_TYPE_BODY, tone: MYTHIC_TONE_SECONDARY, wrap: true, width: mythic_grow() });
+    mythic_label_ex(ui, "Everything here is drawn by MythicUI itself on the CPU: rounded corners, soft shadows, icons and Geist Serif text, with no toolkit underneath.", { role: MYTHIC_TYPE_BODY, tone: MYTHIC_TONE_SECONDARY, wrap: true, width: mythic_grow() });
     mythic_row_begin(ui, { gap: 10, align_y: MYTHIC_ALIGN_CENTER });
       var c: uint32 = mythic_theme(ui)->colors.text_secondary;
       mythic_icon(ui, MYTHIC_ICON_CHECK, 16.0, c);
@@ -191,6 +191,8 @@ fn log_card(ui: MythicUi*, app: App*) {
 
 fn frame(ui: MythicUi*, ud: rawptr) {
   var app: App* = (App*)ud;
+  // mono text in IBM Plex Mono; set every frame because switching themes resets it
+  mythic_theme(ui)->type.mono.font = MYTHIC_FONT_MONO_ALT;
   if (app->building) {
     app->progress = app->progress + mythic_dt(ui) * 0.35;
     if (app->progress >= 1.0) { app->building = false; app->builds = app->builds + 1; }
