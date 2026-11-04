@@ -10,5 +10,6 @@ build/
 tests/
 tools/
 scripts/test-all.sh
+reports/
 __pycache__/
 CLAUDE.md
