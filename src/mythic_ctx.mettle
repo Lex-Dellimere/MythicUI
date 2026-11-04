@@ -90,6 +90,7 @@ export struct MythicNode {
                                    // outside the flow, drawn and hit-tested above it
   end_cb: fn(MythicUi*, MythicNode*) -> void;   // run by mythic_end (scroll view, list)
   ext: rawptr;                     // widget data of an open container (frame arena)
+  hidden: bool;                    // floating root whose target was not declared: not laid out or drawn
 }
 
 export struct MythicHit { id: uint64; rect: MythicRect; }
@@ -183,6 +184,12 @@ export struct MythicUi {
   trace: bool;                     // MYTHIC_TRACE=1
   reduced_motion: bool;            // app-level reduced motion (ORed with theme.reduced_motion)
   debug: bool;                     // MYTHIC_DEBUG=1
+  floats: MythicVec<MythicNode*>;    // floating roots of this pass, declaration order (§3)
+  float_order: MythicNode**;       // the same, sorted by (z, declaration order) after layout
+  deactivated: bool;               // window lost focus (FOCUS_OUT until FOCUS_IN)
+  tip_open: uint64;                // tooltip shown in frame tip_open_frame (warm mode)
+  tip_open_frame: int64;
+  tip_closed_us: int64;            // when the last shown tooltip closed
 }
 
 // ---------------------------------------------------------------- lifecycle (internal, used by mythic_app)
@@ -221,6 +228,7 @@ export fn mythic_ctx_destroy(ui: MythicUi*) {
   mythic_map_free<MythicTween>(&ui->tweens);
   mythic_map_free<MythicScrollState>(&ui->scrolls);
   mythic_vec_free<uint64>(&ui->scroll_ids);
+  mythic_vec_free<MythicNode*>(&ui->floats);
   mythic_edit_clear(ui);
   free((rawptr)ui);
 }
@@ -312,7 +320,10 @@ export fn mythic_ctx_feed(ui: MythicUi*, ev: MythicEvent*) -> bool {
     ui->in.mouse_inside = false;
   } else if (k == MYTHIC_EV_FOCUS_OUT) {
     ui->in.mouse_inside = false;
+    ui->deactivated = true;
     for i: int32 in 0..4 { ui->in.mouse_down[i] = false; }
+  } else if (k == MYTHIC_EV_FOCUS_IN) {
+    ui->deactivated = false;
   } else if (k == MYTHIC_EV_CLOSE) {
     ui->close_requested = true;
     if (ev->repeat) { ui->close_forced = true; }
@@ -390,6 +401,8 @@ export fn mythic_ctx_pass_begin(ui: MythicUi*) {
   ui->opacity = 1.0;
   ui->opacity_base = 1.0;
   mythic_vec_clear<MythicFocusEnt>(ui->focus_cur);
+  mythic_vec_clear<MythicNode*>(&ui->floats);
+  ui->float_order = (MythicNode**)0;
   var r: MythicNode* = (MythicNode*)mythic_arena_alloc_zero(ui->arena, sizeof(MythicNode));
   r->box.width.mode = MYTHIC_FIXED; r->box.width.value = ui->size.x;
   r->box.height.mode = MYTHIC_FIXED; r->box.height.value = ui->size.y;
@@ -427,8 +440,8 @@ fn scroll_laid(ui: MythicUi*, n: MythicNode*) {
   st->laid = n->scroll;
 }
 
-fn collect_hits(ui: MythicUi*, n: MythicNode*) {
-  if (n->hit_id != 0) {
+fn collect_hits(ui: MythicUi*, n: MythicNode*, hits: bool) {
+  if (hits && n->hit_id != 0) {
     var c: MythicRect = clip_rect(n->rect, n->clip);
     if (c.w > 0.0 && c.h > 0.0) {
       var h: MythicHit = { id: n->hit_id, rect: c };
@@ -441,9 +454,28 @@ fn collect_hits(ui: MythicUi*, n: MythicNode*) {
   }
   if (n->box.id != 0 && (n->box.scroll_x || n->box.scroll_y)) { scroll_laid(ui, n); }
   var ch: MythicNode* = n->first;
-  while (ch != 0) { collect_hits(ui, ch); ch = ch->next; }
+  while (ch != 0) { collect_hits(ui, ch, hits); ch = ch->next; }
   ch = n->over;
-  while (ch != 0) { collect_hits(ui, ch); ch = ch->next; }
+  while (ch != 0) { collect_hits(ui, ch, hits); ch = ch->next; }
+}
+
+// floating roots go on top of the main tree in paint order. A passthrough root adds no hits; any
+// other root blocks what is beneath it even where nothing inside is interactive.
+fn collect_float_hits(ui: MythicUi*) {
+  if (ui->float_order == 0) { return; }
+  for i: int64 in 0..ui->floats.len {
+    var n: MythicNode* = ui->float_order[i];
+    if (n->hidden) { continue; }
+    var hits: bool = !n->box.floating.passthrough;
+    if (hits && n->hit_id == 0) {
+      var c: MythicRect = clip_rect(n->rect, n->clip);
+      if (c.w > 0.0 && c.h > 0.0) {
+        var h: MythicHit = { id: n->nid, rect: c };
+        mythic_vec_push<MythicHit>(ui->hits_cur, h);
+      }
+    }
+    collect_hits(ui, n, hits);
+  }
 }
 
 // the wheel goes to the topmost scroll view under the pointer that can still move that way (§3)
@@ -479,7 +511,8 @@ export fn mythic_ctx_pass_end(ui: MythicUi*) -> bool {
   mythic_vec_clear<MythicHit>(ui->hits_cur);
   mythic_vec_clear<uint64>(&ui->scroll_ids);
   ui->focus_rect_id = 0;
-  collect_hits(ui, ui->root);
+  collect_hits(ui, ui->root, true);
+  collect_float_hits(ui);
   var nh: uint64 = hit_test(ui, ui->hits_cur);
   if (ui->pass == 0) {
     // input transitions are consumed by the first pass only: clicks never double-fire
@@ -523,6 +556,20 @@ export fn mythic_ctx_node_add(ui: MythicUi*, kind: int32) -> MythicNode* {
   p->last = n;
   n->nid = mythic_hash_u64(p->nid, (uint64)p->child_count);
   p->child_count = p->child_count + 1;
+  ui->last_node = n;
+  return n;
+}
+
+/// Opens a floating root (MythicBox.floating, §3) under the open container: it takes part in the
+/// ID scope and opacity of where it is declared but not in its parent's layout.
+export fn mythic_ctx_float_add(ui: MythicUi*) -> MythicNode* {
+  var n: MythicNode* = (MythicNode*)mythic_arena_alloc_zero(ui->arena, sizeof(MythicNode));
+  n->opacity = ui->opacity;
+  var p: MythicNode* = ui->cur;
+  n->parent = p;
+  // no child index: a tooltip coming and going must not shift its siblings' anonymous IDs
+  n->nid = mythic_hash_u64(p->nid ^ (uint64)0x666C6F6174, (uint64)ui->floats.len);
+  mythic_vec_push<MythicNode*>(&ui->floats, n);
   ui->last_node = n;
   return n;
 }

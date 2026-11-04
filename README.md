@@ -20,9 +20,10 @@ _Coming soon._
 - **Fast and quiet.** Only the parts of the window that changed get redrawn. A full 1080p repaint takes about 4 to 6 ms, a frame where nothing changed about 0.3 ms, and an idle app uses 0% CPU.
 - **Layout** with rows and columns, padding, gaps, alignment, and fixed, fit, grow and percent sizes. Text can wrap or cut off with an ellipsis.
 - **Widgets:** labels, headings, buttons (primary, secondary, ghost, danger, three sizes, icons), checkboxes, switches, radio buttons, sliders, single-line text inputs (selection, undo, copy and paste, placeholder, error and read-only states), progress bars, cards and panels, separators and icons.
+- **Tabs and tooltips.** Underline tabs with a sliding indicator, and tooltips that show after a short hover or keyboard focus and stay inside the window.
 - **Scroll views and long lists.** Smooth wheel scrolling, overlay scrollbars that fade out when you're done, and lists that only build the rows on screen, so 100k rows is fine.
 - **Animated states.** Hover, press, focus and disabled all animate smoothly. There's a reduced motion option.
-- **Keyboard support.** Tab and Shift+Tab move focus (and scroll the focused widget into view), Enter and Space activate, arrow keys work in radio groups, sliders and lists, and text inputs have the usual editing keys.
+- **Keyboard support.** Tab and Shift+Tab move focus (and scroll the focused widget into view), Enter and Space activate, arrow keys work in radio groups, tabs, sliders and lists, and text inputs have the usual editing keys.
 - **HiDPI.** Everything scales with the screen DPI.
 
 ## Getting started
@@ -75,6 +76,14 @@ mythic_list_begin(ui, "files", { width: mythic_grow(), height: mythic_grow() });
 mythic_end(ui);
 ```
 
+Tabs take an array of labels and the selected index. A tooltip goes right after the item it explains:
+
+```mettle
+var pages: string[3] = ["General", "Appearance", "Advanced"];
+if (mythic_tabs(ui, "settings", pages, &app->page)) { app->dirty = true; }
+mythic_button(ui, "Save"); mythic_tooltip(ui, "Save the settings");
+```
+
 Build it:
 
 ```sh
@@ -105,7 +114,6 @@ MythicUI ships Geist Serif for body text, Geist Sans (Medium and SemiBold) for l
 
 MythicUI is still being built. These are the next things to land:
 
-- Tabs and tooltips
 - A nicer method-style API with callbacks: `ui->button("Save")`, `ui->on_click(fn() { save(app); })`
 - Proper group opacity for disabled widgets
 - More examples: a widget gallery, a build monitor, a settings window, a data explorer and a dashboard with charts

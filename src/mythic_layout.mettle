@@ -1,6 +1,6 @@
 // mythic_layout (W-C): declarative tree + multi-pass layout (DECISIONS §3).
 // Passes: fit widths (pref + min content), resolve widths (fixed, percent, grow, shrink, min/max),
-// wrap text, fit heights, resolve heights, position (scroll offsets, clips).
+// wrap text, fit heights, resolve heights, position (scroll offsets, clips), then floating roots.
 import "mythic_base";
 import "mythic_types";
 import "mythic_ctx";
@@ -12,8 +12,12 @@ import "mythic_fonts";
 // ---------------------------------------------------------------- tree building
 
 /// Opens a container. A non-zero b.id is pushed as the ID scope until mythic_end.
+/// With b.floating.attach set it is a floating root: laid out after the main tree against its
+/// target, outside its parent's layout, and drawn and hit-tested above the main tree (§3).
 export fn mythic_box_begin(ui: MythicUi*, b: MythicBox) {
-  var n: MythicNode* = mythic_ctx_node_add(ui, MYTHIC_NODE_BOX);
+  var n: MythicNode* = 0;
+  if (b.floating.attach != MYTHIC_ATTACH_NONE) { n = mythic_ctx_float_add(ui); }
+  else { n = mythic_ctx_node_add(ui, MYTHIC_NODE_BOX); }
   n->box = b;
   if (b.id != 0) {
     n->nid = b.id;
@@ -406,6 +410,115 @@ fn position_pass(n: MythicNode*) {
   }
 }
 
+// ---------------------------------------------------------------- pass 7: floating roots
+
+// the node with box.id or hit_id == id in the laid-out tree under n
+fn find_id(n: MythicNode*, id: uint64) -> MythicNode* {
+  if (n->box.id == id || n->hit_id == id) { return n; }
+  var c: MythicNode* = n->first;
+  while (c != 0) {
+    var f: MythicNode* = find_id(c, id);
+    if (f != 0) { return f; }
+    c = c->next;
+  }
+  c = n->over;
+  while (c != 0) {
+    var f2: MythicNode* = find_id(c, id);
+    if (f2 != 0) { return f2; }
+    c = c->next;
+  }
+  return 0;
+}
+
+// a floating root's own size along ax: like an overlay child, against the window less the margin
+fn float_size(n: MythicNode*, ax: int32, win: float32) {
+  var s: MythicSize = sz(n, ax);
+  var v: float32 = fitv(n, ax);
+  if (s.mode == MYTHIC_FIXED) { v = s.value; }
+  else if (s.mode == MYTHIC_PERCENT) { v = s.value * win; }
+  else if (s.mode == MYTHIC_GROW) { v = win; }
+  v = clamp_sz(s, v);
+  var room: float32 = win - 2.0 * mythic_maxf(0.0, n->box.floating.clamp_margin);
+  set_len(n, ax, mythic_maxf(0.0, mythic_minf(v, room)));
+}
+
+// anchor a (3x3 grid, 0 = top left .. 8 = bottom right) of rect r, as a fraction of its size
+fn anchor_fx(a: int32) -> float32 { return (float32)(a % 3) / 2.0; }
+fn anchor_fy(a: int32) -> float32 { return (float32)(a / 3) / 2.0; }
+
+// top-left of a w x h box placed with its self anchor on the target anchor of t, plus d
+fn place(t: MythicRect, ta: int32, sa: int32, dx: float32, dy: float32, w: float32, h: float32) -> MythicVec2 {
+  var o: MythicVec2 = { x: t.x + t.w * anchor_fx(ta) - w * anchor_fx(sa) + dx,
+                      y: t.y + t.h * anchor_fy(ta) - h * anchor_fy(sa) + dy };
+  return o;
+}
+
+fn flip_anchor(a: int32) -> int32 { return (2 - a / 3) * 3 + a % 3; }
+
+// how far [y, y + h] sticks out of [lo, hi]
+fn overflow(y: float32, h: float32, lo: float32, hi: float32) -> float32 {
+  return mythic_maxf(0.0, lo - y) + mythic_maxf(0.0, y + h - hi);
+}
+
+fn float_lay(ui: MythicUi*, n: MythicNode*, sc: float32) {
+  var f: MythicFloat = n->box.floating;
+  var win: MythicRect = ui->root->rect;
+  var t: MythicRect = win;
+  if (f.attach == MYTHIC_ATTACH_PARENT) { t = n->parent->rect; }
+  else if (f.attach == MYTHIC_ATTACH_ELEMENT) {
+    // the target's rect from this pass: the main tree, then floating roots laid out before this one
+    var tn: MythicNode* = 0;
+    if (f.target != 0) { tn = find_id(ui->root, f.target); }
+    var i: int64 = 0;
+    while (tn == 0 && f.target != 0 && i < ui->floats.len && ui->floats.data[i] != n) {
+      if (!ui->floats.data[i]->hidden) { tn = find_id(ui->floats.data[i], f.target); }
+      i = i + 1;
+    }
+    if (tn == 0) { n->hidden = true; return; }
+    t = tn->rect;
+  }
+  fit_pass(n, 0);
+  float_size(n, 0, win.w);
+  resolve_pass(n, 0);
+  wrap_pass(n, ui->fonts, sc);
+  fit_pass(n, 1);
+  float_size(n, 1, win.h);
+  resolve_pass(n, 1);
+  var w: float32 = n->rect.w;
+  var h: float32 = n->rect.h;
+  var m: float32 = mythic_maxf(0.0, f.clamp_margin);
+  var pos: MythicVec2 = place(t, f.target_anchor, f.self_anchor, f.dx, f.dy, w, h);
+  if (f.flip_y) {
+    // mirror vertically when that leaves less of it outside the window
+    var over0: float32 = overflow(pos.y, h, win.y + m, win.y + win.h - m);
+    if (over0 > 0.0) {
+      var q: MythicVec2 = place(t, flip_anchor(f.target_anchor), flip_anchor(f.self_anchor), f.dx, -f.dy, w, h);
+      if (overflow(q.y, h, win.y + m, win.y + win.h - m) < over0) { pos = q; }
+    }
+  }
+  // clamp inside the window less the margin (a box larger than that sticks to the near edge)
+  pos.x = mythic_maxf(win.x + m, mythic_minf(pos.x, win.x + win.w - m - w));
+  pos.y = mythic_maxf(win.y + m, mythic_minf(pos.y, win.y + win.h - m - h));
+  n->rect.x = pos.x;
+  n->rect.y = pos.y;
+  n->clip = win;
+  position_pass(n);
+}
+
+// floating roots in paint order: by z, then declaration order (insertion sort: lists are short)
+fn float_sort(ui: MythicUi*) {
+  var k: int64 = ui->floats.len;
+  if (k == 0) { return; }
+  var o: MythicNode** = (MythicNode**)mythic_arena_alloc(ui->arena, k * 8);
+  for i: int64 in 0..k {
+    var n: MythicNode* = ui->floats.data[i];
+    var j: int64 = i;
+    while (j > 0 && o[j - 1]->box.floating.z > n->box.floating.z) { o[j] = o[j - 1]; j = j - 1; }
+    o[j] = n;
+  }
+  ui->float_order = o;
+}
+
 /// Lays out this pass's tree: root = the window (logical px).
 export fn mythic_lay_run(ui: MythicUi*) {
   var r: MythicNode* = ui->root;
@@ -420,6 +533,9 @@ export fn mythic_lay_run(ui: MythicUi*) {
   fit_pass(r, 1);
   resolve_pass(r, 1);
   position_pass(r);
+  // in declaration order, so a nested floating root finds its target already placed
+  for i: int64 in 0..ui->floats.len { float_lay(ui, ui->floats.data[i], sc); }
+  float_sort(ui);
 }
 
 /// Lays out a detached tree rooted at `root` inside `avail` (unit tests, offscreen measuring).
@@ -468,7 +584,7 @@ fn paint_node(ui: MythicUi*, p: MythicPainter*, n: MythicNode*) {
 }
 
 /// Emits the display list for the laid-out tree: window background first, then the tree in
-/// declaration order.
+/// declaration order, then floating roots by (z, declaration order), unclipped.
 export fn mythic_lay_paint(ui: MythicUi*, p: MythicPainter*) {
   var z: MythicCorners;
   var bg: uint32 = mythic_paint_color(p, mythic_theme(ui)->colors.bg_window);
@@ -476,4 +592,9 @@ export fn mythic_lay_paint(ui: MythicUi*, p: MythicPainter*) {
   if (ui->dev_w > 0) { d.w = (float32)ui->dev_w; d.h = (float32)ui->dev_h; }
   mythic_dl_fill(p->dl, d, z, bg);
   paint_node(ui, p, ui->root);
+  if (ui->float_order == 0) { return; }
+  for i: int64 in 0..ui->floats.len {
+    var n: MythicNode* = ui->float_order[i];
+    if (!n->hidden) { paint_node(ui, p, n); }
+  }
 }
