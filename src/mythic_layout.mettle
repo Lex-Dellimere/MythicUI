@@ -92,6 +92,17 @@ export fn mythic_text(ui: MythicUi*, s: string, style: MythicTextStyle, color: u
   n->minc.y = style.line_height;
 }
 
+/// Logical-px size of `s` on one line in `style`: (width, line height). Same measure as
+/// mythic_text, so the style's font (regular, bold, mono) is taken into account.
+export fn mythic_text_size(ui: MythicUi*, s: string, style: MythicTextStyle) -> MythicVec2 {
+  var r: MythicVec2 = { x: 0.0, y: style.line_height };
+  if (ui->fonts == 0 || s.length == (uint64)0) { return r; }
+  var sc: float32 = ui->scale;
+  if (sc <= 0.0) { sc = 1.0; }
+  r.x = mythic_text_width(ui->fonts, mythic_paint_text_spec(sc, style), s) / sc;
+  return r;
+}
+
 export fn mythic_image(ui: MythicUi*, image: int32, w: MythicSize, h: MythicSize, radius: float32) {
   var n: MythicNode* = mythic_ctx_node_add(ui, MYTHIC_NODE_IMAGE);
   n->image = image;
