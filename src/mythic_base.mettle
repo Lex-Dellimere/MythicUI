@@ -54,7 +54,15 @@ export fn mythic_arena_alloc_zero(a: MythicArena*, n: int64) -> rawptr {
 
 /// Copies the bytes of `s` into the arena (the §5 string rule) and returns the copy.
 export fn mythic_arena_str(a: MythicArena*, s: string) -> string {
-  var n: int64 = (int64)s.length;
+  return mythic_arena_strn(a, s, (int64)s.length);
+}
+
+/// Copies the first `len` bytes of `s` (clamped to its length) into the arena and returns the copy.
+/// Lets a caller take a prefix of a string parameter without building a view of it (Amendment 20).
+export fn mythic_arena_strn(a: MythicArena*, s: string, len: int64) -> string {
+  var n: int64 = len;
+  if (n > (int64)s.length) { n = (int64)s.length; }
+  if (n < 0) { n = 0; }
   var out: string;
   var p: uint8* = (uint8*)mythic_arena_alloc(a, n + 1);
   if (n > 0) { memcpy((rawptr)p, (rawptr)s.chars, n); }

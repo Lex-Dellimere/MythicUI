@@ -140,7 +140,7 @@ export fn mythic_tabs_ex(ui: MythicUi*, id_label: string, labels: string[], sele
     var tid: uint64 = mythic_hash_u64(id, (uint64)i);
     var off: bool = tab_off(o, i);
     var tp: TabPaint* = (TabPaint*)mythic_arena_alloc_zero(ui->arena, sizeof(TabPaint));
-    tp->text = mythic_arena_str(ui->arena, mythic_label_text(labels[i]));
+    tp->text = mythic_arena_strn(ui->arena, labels[i], mythic_label_len(labels[i]));
     tp->style = style;
     var tw: float32 = 0.0;
     if (ui->fonts != 0 && tp->text.length > (uint64)0) {

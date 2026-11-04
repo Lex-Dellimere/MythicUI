@@ -465,7 +465,7 @@ export fn mythic_list_item(ui: MythicUi*, label: string, selected: bool) -> bool
   st.flags = MYTHIC_TEXT_ELLIPSIS;
   var tc: uint32 = c->text_primary;
   if (dis) { tc = t->colors.text_disabled; }
-  mythic_text(ui, mythic_label_text(label), st, tc);
+  mythic_text(ui, mythic_arena_strn(ui->arena, label, mythic_label_len(label)), st, tc);
   if (dis) { ui->last_node->opacity = ui->opacity_base; }
   mythic_end(ui);
   var clicked: bool = r.clicked;

@@ -687,19 +687,17 @@ export fn mythic_push_id_int(ui: MythicUi*, i: int64) {
 export fn mythic_pop_id(ui: MythicUi*) {
   if (ui->id_stack.len > 1) { ui->id_stack.len = ui->id_stack.len - 1; }
 }
-/// The displayed part of a label: everything before "##" (a view into `s`, not a copy).
-export fn mythic_label_text(s: string) -> string {
+/// Length in bytes of the displayed part of a label: everything before "##". Returns a length,
+/// not a view: returning a view of a string parameter leaks the caller's interpolated temporary
+/// (Amendment 20). Copy the shown part with `mythic_arena_strn(arena, s, mythic_label_len(s))`.
+export fn mythic_label_len(s: string) -> int64 {
   var n: int64 = (int64)s.length;
   var i: int64 = 0;
   while (i + 1 < n) {
-    if (s.chars[i] == (uint8)35 && s.chars[i + 1] == (uint8)35) {
-      var v: string = s;
-      v.length = (uint64)i;
-      return v;
-    }
+    if (s.chars[i] == (uint8)35 && s.chars[i + 1] == (uint8)35) { return i; }
     i = i + 1;
   }
-  return s;
+  return n;
 }
 
 // ---- theme accessors (§9)

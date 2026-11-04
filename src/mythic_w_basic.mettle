@@ -202,7 +202,7 @@ export fn mythic_button_ex(ui: MythicUi*, label: string, o: MythicButtonOpts) ->
   if (o.size == MYTHIC_CTRL_SM) { cs = t->ctrl.sm; } else if (o.size == MYTHIC_CTRL_LG) { cs = t->ctrl.lg; }
   var id: uint64 = mythic_id(ui, label);
   var d: BtnPaint* = (BtnPaint*)mythic_arena_alloc_zero(ui->arena, sizeof(BtnPaint));
-  d->text = mythic_arena_str(ui->arena, mythic_label_text(label));
+  d->text = mythic_arena_strn(ui->arena, label, mythic_label_len(label));
   d->style = cs.text;
   d->radius = cs.radius;
   var sc: float32 = ui->scale;
@@ -346,7 +346,7 @@ fn prog_paint(ui: MythicUi*, p: MythicPainter*, r: MythicRect, data: rawptr) {
 /// label a header row (label left, percentage right) sits 6 px above the bar.
 export fn mythic_progress_ex(ui: MythicUi*, label: string, value: float32, o: MythicProgressOpts) {
   var t: MythicTheme* = mythic_theme(ui);
-  var shown: string = mythic_label_text(label);
+  var shown: string = mythic_arena_strn(ui->arena, label, mythic_label_len(label));
   var col: bool = shown.length > (uint64)0;
   if (col) {
     var cb: MythicBox = { width: mythic_grow(), gap: 6 };

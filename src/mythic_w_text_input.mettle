@@ -488,7 +488,7 @@ export fn mythic_text_input_ex(ui: MythicUi*, label: string, buf: MythicTextBuf*
   var st: MythicTextStyle = t->type.body;
   if (o.size == MYTHIC_CTRL_SM) { st = t->type.label_sm; st.font = MYTHIC_FONT_REGULAR; }
   var id: uint64 = mythic_id(ui, label);
-  var shown: string = mythic_label_text(label);
+  var shown: string = mythic_arena_strn(ui->arena, label, mythic_label_len(label));
   var has_w: bool = o.width.mode != MYTHIC_FIT || o.width.value != 0.0;
   var col: bool = shown.length > (uint64)0;
   var dis: bool = ui->disabled_depth > 0;
