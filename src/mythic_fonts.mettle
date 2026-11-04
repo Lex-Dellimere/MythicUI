@@ -8,8 +8,11 @@ import "mythic_glyph";
 // Reserved Font Name "Plex"). Pick it with `theme.type.mono.font = MYTHIC_FONT_MONO_ALT`.
 export const MYTHIC_FONT_MONO_ALT: int32 = 4;
 
-// Geist Serif ships one weight, so the regular, medium and semibold roles share one face.
+// Geist Serif ships one weight, so the medium and semibold roles (labels, buttons, titles) use
+// Geist Sans, which has the same vertical metrics.
 var g_mythic_font_serif: string = import_str "../assets/fonts/GeistSerif-Regular.ttf";
+var g_mythic_font_medium: string = import_str "../assets/fonts/Geist-Medium.ttf";
+var g_mythic_font_semibold: string = import_str "../assets/fonts/Geist-SemiBold.ttf";
 var g_mythic_font_mono: string = import_str "../assets/fonts/JetBrainsMono-Regular.ttf";
 var g_mythic_font_mono_alt: string = import_str "../assets/fonts/MythicMonoAlt-Regular.ttf";
 
@@ -43,11 +46,13 @@ fn add_str(f: MythicFonts*, s: string) -> int32 {
 export fn mythic_fonts_create() -> MythicFonts* {          // registers the embedded faces as ids 0..4
   var f: MythicFonts* = new MythicFonts;
   var se: string = g_mythic_font_serif;
+  var md: string = g_mythic_font_medium;
+  var sb: string = g_mythic_font_semibold;
   var mo: string = g_mythic_font_mono;
   var ma: string = g_mythic_font_mono_alt;
   add_str(f, se);
-  add_str(f, se);
-  add_str(f, se);
+  add_str(f, md);
+  add_str(f, sb);
   add_str(f, mo);
   add_str(f, ma);
   return f;

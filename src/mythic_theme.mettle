@@ -247,7 +247,7 @@ fn colors_dark() -> MythicColors {
 // DESIGN-SYSTEM §3.3 / §4 / §6.2 values shared by both themes.
 fn theme_common() -> MythicTheme {
   var t: MythicTheme;
-  // Geist Serif is set at its own spacing (no tracking); the weight roles share one face.
+  // Regular roles are Geist Serif, medium and semibold roles Geist Sans; all at tracking 0.
   t.type.caption = ts(MYTHIC_FONT_REGULAR, 12.0, 16.0, 0.0);
   t.type.caption_strong = ts(MYTHIC_FONT_MEDIUM, 12.0, 16.0, 0.0);
   t.type.body = ts(MYTHIC_FONT_REGULAR, 14.0, 20.0, 0.0);

@@ -4,28 +4,29 @@
 Inputs (official upstream releases, OFL-1.1):
   Geist Serif 1.001  https://github.com/vercel/geist-font/releases/download/v1.9.0/geist-font-v1.9.0.zip
   (release v1.9.0)   -> geist-font/GeistSerif/ttf/GeistSerif-Regular.ttf
+  Geist 1.9.0        same zip -> geist-font/Geist/ttf/Geist-{Medium,SemiBold}.ttf
   IBM Plex Mono 2.005 https://github.com/IBM/plex/releases/download/%40ibm%2Fplex-mono%402.5.0/ibm-plex-mono.zip
   (@ibm/plex-mono@2.5.0) -> ibm-plex-mono/fonts/complete/ttf/IBMPlexMono-Regular.ttf
   JetBrains Mono 2.304 https://github.com/JetBrains/JetBrainsMono/releases/download/v2.304/JetBrainsMono-2.304.zip
                      -> fonts/ttf/JetBrainsMono-Regular.ttf
 
-Geist Serif ships one weight (Regular 400). Its variable font has a shape axis (ELSH) only,
-no weight axis, so there are no Medium/SemiBold instances to make; the static Regular
-(default round-dot shape) is used as is.
+Geist Serif ships one weight (Regular 400); its variable font has a shape axis (ELSH) only.
+So body text is Geist Serif Regular and the medium and semibold roles (labels, buttons,
+titles) use Geist Sans Medium and SemiBold, which share Geist Serif's vertical metrics.
 
 What this does to each font (permitted by OFL-1.1 section 3):
   * subsets to the Unicode ranges in UNICODES (Latin, Greek, Cyrillic, punctuation,
     currency, arrows, common symbols) - MythicUI does no complex shaping (AC: out of scope)
   * removes TrueType hinting bytecode (fpgm/prep/cvt) - MythicUI's rasterizer is unhinted
-  * removes GSUB/GPOS/GDEF and, for Geist Serif, replaces GPOS pair kerning with a flat
+  * removes GSUB/GPOS/GDEF and, for the Geist faces, replaces GPOS pair kerning with a flat
     legacy 'kern' table (version 0, one format-0 subtable, horizontal) so the engine
     only needs the trivial format-0 binary search for kerning (both monos have no kerning)
   * glyph outlines stay 'glyf' quadratic TrueType; metrics tables unchanged
   * IBM Plex Mono declares the Reserved Font Name "Plex", so the modified font is renamed
-    "Mythic Mono Alt" (OFL section 3). Geist Serif and JetBrains Mono declare none and
-    keep their names.
+    "Mythic Mono Alt" (OFL section 3). Geist, Geist Serif and JetBrains Mono declare
+    none and keep their names.
 
-Usage: python3 build_fonts.py <GeistSerif-Regular.ttf> <IBMPlexMono-Regular.ttf> <JetBrainsMono-Regular.ttf> <out_dir>
+Usage: python3 build_fonts.py <GeistSerif-Regular.ttf> <geist_ttf_dir> <IBMPlexMono-Regular.ttf> <JetBrainsMono-Regular.ttf> <out_dir>
 """
 import sys, os
 from fontTools.ttLib import TTFont, newTable
@@ -202,13 +203,19 @@ def save(f, dst, n=None):
 
 
 def main():
-    serif, plex, jbm, out = sys.argv[1:5]
+    serif, geist_dir, plex, jbm, out = sys.argv[1:6]
     os.makedirs(out, exist_ok=True)
     f = do_subset(serif, True)
     pairs = flatten_kern(f)
     strip_layout(f)
     n = add_kern(f, pairs)
     save(f, os.path.join(out, 'GeistSerif-Regular.ttf'), n)
+    for w in ('Medium', 'SemiBold'):
+        f = do_subset(os.path.join(geist_dir, f'Geist-{w}.ttf'), True)
+        pairs = flatten_kern(f)
+        strip_layout(f)
+        n = add_kern(f, pairs)
+        save(f, os.path.join(out, f'Geist-{w}.ttf'), n)
     f = do_subset(plex, False)
     strip_layout(f)
     rename(f)

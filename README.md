@@ -15,7 +15,7 @@ _Coming soon._
 ## What you get
 
 - **Windows and Linux from one codebase.** Win32 on Windows, and the X11 protocol spoken directly over a socket on Linux.
-- **It looks good out of the box.** A clean design system (light and dark themes) with Geist Serif as the UI font, soft shadows, rounded corners and proper focus rings.
+- **It looks good out of the box.** A clean design system (light and dark themes) with Geist Serif for text and Geist Sans for labels and titles, soft shadows, rounded corners and proper focus rings.
 - **Everything is drawn by MythicUI itself** on the CPU: antialiased shapes, shadows, gradients, vector icons and TrueType text. The fonts are built into the library, so apps work on machines with no fonts installed.
 - **Fast and quiet.** Only the parts of the window that changed get redrawn. A full 1080p repaint takes about 4 to 6 ms, a frame where nothing changed about 0.3 ms, and an idle app uses 0% CPU.
 - **Layout** with rows and columns, padding, gaps, alignment, and fixed, fit, grow and percent sizes. Text can wrap or cut off with an ellipsis.
@@ -99,7 +99,7 @@ Every frame your function declares the UI. MythicUI lays it out, turns it into a
 
 ## Fonts
 
-MythicUI ships Geist Serif for UI text, JetBrains Mono for monospace text, and IBM Plex Mono as a second monospace, all subset in `assets/fonts`. Pick IBM Plex Mono with `mythic_theme(ui)->type.mono.font = MYTHIC_FONT_MONO_ALT;`. All three are under the SIL Open Font License, see the license files in that folder. IBM Plex Mono reserves the name "Plex", so the subset copy is renamed "Mythic Mono Alt" as the license requires.
+MythicUI ships Geist Serif for body text, Geist Sans (Medium and SemiBold) for labels, buttons and titles, JetBrains Mono for monospace text, and IBM Plex Mono as a second monospace, all subset in `assets/fonts`. Pick IBM Plex Mono with `mythic_theme(ui)->type.mono.font = MYTHIC_FONT_MONO_ALT;`. All of them are under the SIL Open Font License, see the license files in that folder. IBM Plex Mono reserves the name "Plex", so the subset copy is renamed "Mythic Mono Alt" as the license requires.
 
 ## Coming next
 
