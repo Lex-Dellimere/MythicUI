@@ -1,4 +1,4 @@
-// mythic_plat_x11 (W-A): pure wire-protocol X11 backend (DECISIONS §8, Appendix B).
+// mythic_plat_x11: pure wire-protocol X11 backend (DECISIONS §8, Appendix B).
 // Compiled only on linux (guarded import in mythic_plat). No libX11/xcb: raw syscalls over AF_UNIX.
 import "std/mem";
 import "std/io";
@@ -1058,6 +1058,11 @@ fn x11_close(self: rawptr) {
   }
   if (!x->shm_ok && x->px != 0) { free(x->px); }
   x->px = (uint32*)0;
+  if (x->clip != 0) { free(x->clip); }
+  x->clip = (uint8*)0;
+  x->clip_len = 0;
+  x->own_clip = false;
+  x->own_primary = false;
   if (x->fd >= 0) { syscall(3, (int64)x->fd); }
   x->fd = -1;
 }
