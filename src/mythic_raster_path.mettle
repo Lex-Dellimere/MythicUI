@@ -26,7 +26,41 @@ fn floori(x: float32) -> int32 {
 }
 
 /// Accumulates the line (x0,y0)-(x1,y1), in buffer pixel coordinates.
+/// A line that leaves the buffer sideways is split where it crosses x = 0 and x = w, so each
+/// piece lies on one side and clamping its x is exact: a piece left of the buffer becomes a
+/// vertical edge at x = 0 (full coverage to its right), one right of it a vertical edge at
+/// x = w (no visible coverage). Clamping the endpoints of an unsplit line would bend it.
 export fn mythic_r_acc_line(a: MythicAccum*, x0: float32, y0: float32, x1: float32, y1: float32) {
+  if (y0 == y1) { return; }
+  var maxx: float32 = (float32)a->w;
+  if ((x0 >= 0.0 && x1 >= 0.0 && x0 <= maxx && x1 <= maxx) || x0 == x1) {
+    acc_piece(a, x0, y0, x1, y1);
+    return;
+  }
+  // the crossings with x = 0 and x = w strictly inside the line, in order along it
+  var dx: float32 = x1 - x0;
+  var ta: float32 = 2.0; var xa: float32 = 0.0;
+  var tb: float32 = 2.0; var xb: float32 = maxx;
+  if ((x0 < 0.0 && x1 > 0.0) || (x0 > 0.0 && x1 < 0.0)) { ta = (0.0 - x0) / dx; }
+  if ((x0 < maxx && x1 > maxx) || (x0 > maxx && x1 < maxx)) { tb = (maxx - x0) / dx; }
+  if (tb < ta) { var tt: float32 = ta; ta = tb; tb = tt; xa = maxx; xb = 0.0; }
+  var dy: float32 = y1 - y0;
+  var px: float32 = x0; var py: float32 = y0;
+  if (ta < 1.0) {
+    var qy: float32 = y0 + ta * dy;
+    acc_piece(a, px, py, xa, qy);
+    px = xa; py = qy;
+  }
+  if (tb < 1.0) {
+    var ry: float32 = y0 + tb * dy;
+    acc_piece(a, px, py, xb, ry);
+    px = xb; py = ry;
+  }
+  acc_piece(a, px, py, x1, y1);
+}
+
+// One piece of a line that does not cross x = 0 or x = w (endpoints may lie outside).
+fn acc_piece(a: MythicAccum*, x0: float32, y0: float32, x1: float32, y1: float32) {
   if (y0 == y1) { return; }
   var dir: float32 = 1.0;
   var ax: float32 = x0; var ay: float32 = y0; var bx: float32 = x1; var by: float32 = y1;
