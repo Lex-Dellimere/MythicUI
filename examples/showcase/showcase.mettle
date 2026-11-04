@@ -1,5 +1,6 @@
 // A small tour of what MythicUI can do today: layout, cards, buttons, toggles,
-// sliders, progress, icons, keyboard focus (press Tab) and light/dark themes.
+// sliders, progress, text inputs, the clipboard, icons, keyboard focus (press Tab)
+// and light/dark themes.
 import "mythic/mythic";
 
 struct App {
@@ -14,6 +15,35 @@ struct App {
   building: bool;
   progress: float32;
   builds: int32;
+  name: MythicTextBuf;
+  version: MythicTextBuf;
+  output: MythicTextBuf;
+  status: int32;        // 0 none, 1 saved, 2 copied
+}
+
+// "1", "1.2" or "1.2.3": digits separated by single dots.
+fn version_ok(b: MythicTextBuf*) -> bool {
+  var s: string = mythic_textbuf_str(b);
+  var n: int64 = (int64)s.length;
+  if (n == 0) { return false; }
+  var digit: bool = false;
+  for i: int64 in 0..n {
+    var c: int32 = (int32)(uint8)s.chars[i];
+    if (c >= 48 && c <= 57) {
+      digit = true;
+    } else if (c == 46 && digit) {
+      digit = false;
+    } else {
+      return false;
+    }
+  }
+  return digit;
+}
+
+fn update_output(app: App*) {
+  var name: string = mythic_textbuf_str(&app->name);
+  if (name.length == 0) { name = "app"; }
+  mythic_textbuf_set(&app->output, "build/release/{name}");
 }
 
 fn header(ui: MythicUi*, app: App*) {
@@ -83,6 +113,35 @@ fn settings_card(ui: MythicUi*, app: App*) {
   mythic_end(ui);
 }
 
+fn project_card(ui: MythicUi*, app: App*) {
+  mythic_card_begin_ex(ui, { width: mythic_grow(), pad: mythic_pad(20), gap: 14 }, { elevation: 1 });
+    mythic_label_ex(ui, "Project", { role: MYTHIC_TYPE_TITLE });
+    mythic_row_begin(ui, { width: mythic_grow(), gap: 16 });
+      if (mythic_text_input_ex(ui, "Name", &app->name, { placeholder: "my-app", width: mythic_grow() })) {
+        update_output(app);
+        app->status = 0;
+      }
+      if (mythic_last(ui).submitted) { app->status = 1; }
+      var bad: bool = !version_ok(&app->version);
+      mythic_text_input_ex(ui, "Version", &app->version, { placeholder: "1.0.0", width: mythic_fixed(160), error: bad });
+    mythic_end(ui);
+    mythic_row_begin(ui, { width: mythic_grow(), gap: 8, align_y: MYTHIC_ALIGN_END });
+      mythic_text_input_ex(ui, "Output", &app->output, { icon: MYTHIC_ICON_ARROW_RIGHT, width: mythic_grow(), read_only: true });
+      if (mythic_button(ui, "Copy path")) {
+        mythic_clipboard_set(ui, mythic_textbuf_str(&app->output));
+        app->status = 2;
+      }
+    mythic_end(ui);
+    if (app->status == 1) {
+      mythic_label_ex(ui, "Saved.", { role: MYTHIC_TYPE_BODY, tone: MYTHIC_TONE_SECONDARY });
+    } else if (app->status == 2) {
+      mythic_label_ex(ui, "Output path copied. Paste it anywhere, or into the name field with Ctrl+V.", { role: MYTHIC_TYPE_BODY, tone: MYTHIC_TONE_SECONDARY });
+    } else {
+      mythic_label_ex(ui, "Enter saves the name. Ctrl+Z undoes, and copy and paste work with other apps.", { role: MYTHIC_TYPE_BODY, tone: MYTHIC_TONE_SECONDARY });
+    }
+  mythic_end(ui);
+}
+
 fn frame(ui: MythicUi*, ud: rawptr) {
   var app: App* = (App*)ud;
   if (app->building) {
@@ -96,6 +155,7 @@ fn frame(ui: MythicUi*, ud: rawptr) {
       build_card(ui, app);
       settings_card(ui, app);
     mythic_end(ui);
+    project_card(ui, app);
   mythic_end(ui);
 }
 
@@ -105,5 +165,13 @@ fn main() -> int32 {
   app.threads = 0.6;
   app.optimize = true;
   app.notify = true;
-  return mythic_run({ title: "MythicUI showcase", width: 860, height: 560 }, &frame, (rawptr)&app);
+  app.name.max_len = 40;
+  mythic_textbuf_set(&app.name, "mythic-demo");
+  mythic_textbuf_set(&app.version, "0.3.0");
+  update_output(&app);
+  var rc: int32 = mythic_run({ title: "MythicUI showcase", width: 860, height: 760 }, &frame, (rawptr)&app);
+  mythic_textbuf_free(&app.name);
+  mythic_textbuf_free(&app.version);
+  mythic_textbuf_free(&app.output);
+  return rc;
 }
