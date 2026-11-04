@@ -109,3 +109,7 @@ MythicUI is still being built. These are the next things to land:
 - A nicer method-style API with callbacks: `ui->button("Save")`, `ui->on_click(fn() { save(app); })`
 - Proper group opacity for disabled widgets
 - More examples: a widget gallery, a build monitor, a settings window, a data explorer and a dashboard with charts
+
+## License
+
+MythicUI is under the [Apache License 2.0](LICENSE). The fonts in `assets/fonts` are under the SIL Open Font License 1.1; see [NOTICE](NOTICE).
