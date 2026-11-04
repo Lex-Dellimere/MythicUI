@@ -4,12 +4,15 @@ import "std/mem";
 import "std/io";
 import "mythic_types";
 import "mythic_plat_x11_keys";
+import "mythic_utf8";
 
 const X_RBUF = 65536;
 const X_RQCAP = 1024;            // parked raw event packets (32 bytes each)
 const X_EQCAP = 4096;            // translated MythicEvents
 const X_STRIP_BYTES = 262144;    // PutImage strip request size
-const X_EVENT_MASK = 2261119;    // key, button, enter/leave, motion, exposure, structure, focus
+const X_EVENT_MASK = 6455423;    // key, button, enter/leave, motion, exposure, structure, focus, property
+const X_SEL_TIMEOUT_MS = 300;    // paste: wait for SelectionNotify
+const X_INCR_TIMEOUT_MS = 1000;  // paste: wait for each INCR chunk
 
 export struct MythicX11 {
   plat: MythicPlatform;
@@ -38,6 +41,9 @@ export struct MythicX11 {
   cursor_shape: int32;
   cursors: int64[8];
   dead_close_sent: bool;
+  a_clipboard: int64; a_targets: int64; a_text: int64; a_incr: int64; a_sel: int64;
+  clip: uint8*; clip_len: int64; own_clip: bool; own_primary: bool; own_time: int64;
+  last_time: int64;                 // server time of the newest input event
 }
 
 // ---------- byte packing (little-endian; we send 'l') ----------
@@ -210,11 +216,14 @@ fn print_xerror(x: MythicX11*, e: uint8*) {
 }
 
 // Handles one non-reply packet read while waiting for something else: errors are reported,
-// ShmCompletion clears the pending flag, everything else is parked for translation.
+// ShmCompletion clears the pending flag, selection traffic is answered at once (so a paste from
+// another client never waits on our frame loop), everything else is parked for translation.
 fn park(x: MythicX11*, e: uint8*) {
   var t: int64 = rd8(e, 0) & 127;
   if (t == 0) { print_xerror(x, e); return; }
   if (x->shm_ok && t == x->shm_event) { x->shm_pending = false; return; }
+  if (t == 29) { sel_clear(x, e); return; }
+  if (t == 30) { sel_request(x, e); return; }
   rq_push(x, e);
 }
 
@@ -446,11 +455,15 @@ fn intern_atom(x: MythicX11*, name: string, only_if_exists: bool) -> int64 {
 }
 
 fn change_property(x: MythicX11*, prop: int64, ptype: int64, format: int64, data: uint8*, nbytes: int64) {
+  change_property_on(x, x->win, prop, ptype, format, data, nbytes);
+}
+
+fn change_property_on(x: MythicX11*, win: int64, prop: int64, ptype: int64, format: int64, data: uint8*, nbytes: int64) {
   var len: int64 = 24 + pad4(nbytes);
   var r: uint8* = (uint8*)malloc(len);
   zero(r, len);
   wr8(r, 0, 18); wr8(r, 1, 0); wr16(r, 2, len / 4);
-  wr32(r, 4, x->win); wr32(r, 8, prop); wr32(r, 12, ptype);
+  wr32(r, 4, win); wr32(r, 8, prop); wr32(r, 12, ptype);
   wr8(r, 16, format);
   wr32(r, 20, nbytes / (format / 8));
   for i: int64 in 0..nbytes { r[24 + i] = data[i]; }
@@ -612,6 +625,8 @@ fn peek_next(x: MythicX11*) -> int64 {
 
 fn translate(x: MythicX11*, e: uint8*) {
   var code: int64 = rd8(e, 0) & 127;
+  if (code >= 2 && code <= 8) { x->last_time = rd32(e, 4); }
+  if (code == 28) { x->last_time = rd32(e, 12); }
   switch (code) {
     case 2: { key_press(x, e, false); }
     case 3: {
@@ -951,6 +966,11 @@ fn x11_open(self: rawptr, desc: MythicWindowDesc*) -> int32 {
   x->a_delete = intern_atom(x, "WM_DELETE_WINDOW", false);
   x->a_net_wm_name = intern_atom(x, "_NET_WM_NAME", false);
   x->a_utf8 = intern_atom(x, "UTF8_STRING", false);
+  x->a_clipboard = intern_atom(x, "CLIPBOARD", false);
+  x->a_targets = intern_atom(x, "TARGETS", false);
+  x->a_text = intern_atom(x, "TEXT", false);
+  x->a_incr = intern_atom(x, "INCR", false);
+  x->a_sel = intern_atom(x, "MYTHIC_SEL", false);
 
   x->win = new_id(x);
   var r: uint8[44];
@@ -1146,8 +1166,279 @@ fn x11_set_cursor(self: rawptr, cursor: int32) {
   send_req(x, &w[0], 16);
 }
 
-fn x11_clipboard_set(self: rawptr, s: uint8*, n: int64) { }      // M3
-fn x11_clipboard_get(self: rawptr, out: MythicBytes*) -> bool { return false; }   // M3
+// ---------- clipboard (ICCCM selections: CLIPBOARD, and PRIMARY on copy) ----------
+fn set_owner(x: MythicX11*, sel: int64, time: int64) {
+  var r: uint8[16];
+  wr8(&r[0], 0, 22); wr8(&r[0], 1, 0); wr16(&r[0], 2, 4);
+  wr32(&r[0], 4, x->win); wr32(&r[0], 8, sel); wr32(&r[0], 12, time);
+  send_req(x, &r[0], 16);
+}
+
+fn get_owner(x: MythicX11*, sel: int64) -> int64 {
+  var r: uint8[8];
+  wr8(&r[0], 0, 23); wr8(&r[0], 1, 0); wr16(&r[0], 2, 2); wr32(&r[0], 4, sel);
+  var p: uint8* = wait_reply(x, send_req(x, &r[0], 8));
+  if (p == 0) { return 0; }
+  var owner: int64 = rd32(p, 8);
+  free(p);
+  return owner;
+}
+
+fn delete_property(x: MythicX11*, prop: int64) {
+  var r: uint8[12];
+  wr8(&r[0], 0, 19); wr8(&r[0], 1, 0); wr16(&r[0], 2, 3); wr32(&r[0], 4, x->win); wr32(&r[0], 8, prop);
+  send_req(x, &r[0], 12);
+}
+
+fn bytes_append(b: MythicBytes*, cap: int64*, src: uint8*, n: int64) {
+  if (b->len + n + 1 > *cap) {
+    var nc: int64 = *cap * 2;
+    if (nc < b->len + n + 1) { nc = b->len + n + 1; }
+    b->data = (uint8*)realloc((rawptr)b->data, nc);
+    *cap = nc;
+  }
+  for i: int64 in 0..n { b->data[b->len + i] = src[i]; }
+  b->len = b->len + n;
+  b->data[b->len] = (uint8)0;
+}
+
+// Reads a whole property of our window (in 4 MB pieces). Malloc'd, nul-terminated.
+fn read_property(x: MythicX11*, prop: int64, out: MythicBytes*, ptype: int64*) -> bool {
+  var cap: int64 = 64;
+  out->data = (uint8*)malloc(cap);
+  out->data[0] = (uint8)0;
+  out->len = 0;
+  var off: int64 = 0;
+  while (true) {
+    var r: uint8[24];
+    wr8(&r[0], 0, 20); wr8(&r[0], 1, 0); wr16(&r[0], 2, 6);
+    wr32(&r[0], 4, x->win); wr32(&r[0], 8, prop); wr32(&r[0], 12, 0);
+    wr32(&r[0], 16, off); wr32(&r[0], 20, 1048576);
+    var p: uint8* = wait_reply(x, send_req(x, &r[0], 24));
+    if (p == 0) { free(out->data); out->data = (uint8*)0; return false; }
+    *ptype = rd32(p, 8);
+    var n: int64 = rd32(p, 16) * (rd8(p, 1) / 8);
+    bytes_append(out, &cap, &p[32], n);
+    var after: int64 = rd32(p, 12);
+    free(p);
+    if (after == 0 || n == 0) { break; }
+    off = off + n / 4;
+  }
+  return true;
+}
+
+fn latin1_to_utf8(s: uint8*, n: int64, out: MythicBytes*) {
+  var d: uint8* = (uint8*)malloc(n * 2 + 1);
+  var o: int64 = 0;
+  for i: int64 in 0..n { o = o + (int64)mythic_utf8_encode((uint32)s[i], &d[o]); }
+  d[o] = (uint8)0;
+  out->data = d;
+  out->len = o;
+}
+
+// Non-Latin-1 code points become '?'.
+fn utf8_to_latin1(s: uint8*, n: int64, out_len: int64*) -> uint8* {
+  var d: uint8* = (uint8*)malloc(n + 1);
+  var o: int64 = 0;
+  var i: int64 = 0;
+  var cp: uint32 = 0;
+  while (i < n) {
+    i = mythic_utf8_decode(s, n, i, &cp);
+    if (cp > (uint32)255) { cp = 63; }
+    d[o] = (uint8)cp;
+    o = o + 1;
+  }
+  *out_len = o;
+  return d;
+}
+
+// Longest prefix that fits in one ChangeProperty request. We do not send INCR, so larger copies
+// are truncated (at a UTF-8 boundary when `utf8`).
+fn sel_fit(x: MythicX11*, s: uint8*, n: int64, utf8: bool) -> int64 {
+  var lim: int64 = x->max_req * 4 - 24;
+  if (n <= lim) { return n; }
+  var k: int64 = lim;
+  while (utf8 && k > 0 && (s[k] & (uint8)0xC0) == (uint8)0x80) { k = k - 1; }
+  return k;
+}
+
+fn sel_clear(x: MythicX11*, e: uint8*) {
+  if (rd32(e, 8) != x->win) { return; }
+  // a clear stamped before our latest SetSelectionOwner is about an ownership we already replaced
+  if (x->own_time != 0 && rd32(e, 4) < x->own_time) { return; }
+  var sel: int64 = rd32(e, 12);
+  if (sel == x->a_clipboard) { x->own_clip = false; }
+  if (sel == 1) { x->own_primary = false; }
+}
+
+fn sel_request(x: MythicX11*, e: uint8*) {
+  var time: int64 = rd32(e, 4);
+  var requestor: int64 = rd32(e, 12);
+  var sel: int64 = rd32(e, 16);
+  var target: int64 = rd32(e, 20);
+  var prop: int64 = rd32(e, 24);
+  if (prop == 0) { prop = target; }    // obsolete requestors leave the property None
+  var owned: bool = (sel == x->a_clipboard && x->own_clip) || (sel == 1 && x->own_primary);
+  var answer: int64 = 0;
+  if (owned && target == x->a_targets) {
+    var a: uint8[16];
+    wr32(&a[0], 0, x->a_targets); wr32(&a[0], 4, x->a_utf8); wr32(&a[0], 8, 31); wr32(&a[0], 12, x->a_text);
+    change_property_on(x, requestor, prop, 4, 32, &a[0], 16);    // type ATOM
+    answer = prop;
+  } else if (owned && (target == x->a_utf8 || target == x->a_text)) {
+    change_property_on(x, requestor, prop, x->a_utf8, 8, x->clip, sel_fit(x, x->clip, x->clip_len, true));
+    answer = prop;
+  } else if (owned && target == 31) {
+    var ln: int64 = 0;
+    var l1: uint8* = utf8_to_latin1(x->clip, x->clip_len, &ln);
+    change_property_on(x, requestor, prop, 31, 8, l1, sel_fit(x, l1, ln, false));
+    free(l1);
+    answer = prop;
+  }
+  var r: uint8[44];
+  zero(&r[0], 44);
+  wr8(&r[0], 0, 25); wr8(&r[0], 1, 0); wr16(&r[0], 2, 11);    // SendEvent, no propagate, mask 0
+  wr32(&r[0], 4, requestor);
+  wr8(&r[0], 12, 31);                                          // SelectionNotify
+  wr32(&r[0], 16, time); wr32(&r[0], 20, requestor); wr32(&r[0], 24, sel);
+  wr32(&r[0], 28, target); wr32(&r[0], 32, answer);
+  send_req(x, &r[0], 44);
+}
+
+// Handles whatever is already readable without blocking (a pending SelectionClear, say).
+fn pump_pending(x: MythicX11*) {
+  var hdr: uint8[32];
+  while (!x->dead && (x->rpos < x->rlen || poll_fd(x, 0) > 0)) {
+    var p: uint8* = read_packet(x, &hdr[0]);
+    if (p != 0) { free(p); continue; }
+    if (!x->dead) { park(x, &hdr[0]); }
+  }
+}
+
+// Waits for our SelectionNotify for `target` (code 31) or a NewValue on `prop` (code 28).
+// Other events are parked for the normal path; property noise on `prop` is dropped.
+fn wait_sel_event(x: MythicX11*, code: int64, target: int64, prop: int64, timeout_ms: int64, e: uint8*) -> bool {
+  var deadline: int64 = now_mono_us() + timeout_ms * 1000;
+  while (!x->dead) {
+    if (x->rpos == x->rlen) {
+      var rem: int64 = (deadline - now_mono_us() + 999) / 1000;
+      if (rem <= 0) { return false; }
+      var pr: int64 = poll_fd(x, rem);
+      if (pr == -4) { continue; }
+      if (pr <= 0) { return false; }
+    }
+    var p: uint8* = read_packet(x, e);
+    if (p != 0) { free(p); continue; }
+    if (x->dead) { break; }
+    var t: int64 = rd8(e, 0) & 127;
+    if (t == 31 && rd32(e, 8) == x->win && rd32(e, 12) == x->a_clipboard && rd32(e, 16) == target) {
+      if (code == 31) { return true; }
+      continue;
+    }
+    if (t == 28 && rd32(e, 4) == x->win && rd32(e, 8) == prop) {
+      if (code == 28 && rd8(e, 16) == 0) { return true; }
+      continue;
+    }
+    park(x, e);
+  }
+  return false;
+}
+
+// INCR receive: deleting the INCR property asks for the first chunk; each NewValue is a chunk,
+// and a zero-length chunk ends the transfer.
+fn read_incr(x: MythicX11*, prop: int64, out: MythicBytes*, ptype: int64*) -> bool {
+  var cap: int64 = 4096;
+  out->data = (uint8*)malloc(cap);
+  out->data[0] = (uint8)0;
+  out->len = 0;
+  var e: uint8[32];
+  while (true) {
+    var c: MythicBytes;
+    if (!wait_sel_event(x, 28, 0, prop, X_INCR_TIMEOUT_MS, &e[0]) || !read_property(x, prop, &c, ptype)) {
+      free(out->data);
+      out->data = (uint8*)0;
+      return false;
+    }
+    delete_property(x, prop);
+    var n: int64 = c.len;
+    bytes_append(out, &cap, c.data, n);
+    free(c.data);
+    if (n == 0) { break; }
+  }
+  return true;
+}
+
+// 1 = got data, 0 = the owner refused the target (or there is no owner), -1 = timeout or error.
+fn convert_sel(x: MythicX11*, target: int64, out: MythicBytes*) -> int32 {
+  var r: uint8[24];
+  wr8(&r[0], 0, 24); wr8(&r[0], 1, 0); wr16(&r[0], 2, 6);
+  wr32(&r[0], 4, x->win); wr32(&r[0], 8, x->a_clipboard); wr32(&r[0], 12, target);
+  wr32(&r[0], 16, x->a_sel); wr32(&r[0], 20, 0);
+  send_req(x, &r[0], 24);
+  var e: uint8[32];
+  if (!wait_sel_event(x, 31, target, x->a_sel, X_SEL_TIMEOUT_MS, &e[0])) { return -1; }
+  var prop: int64 = rd32(&e[0], 20);
+  if (prop == 0) { return 0; }
+  var b: MythicBytes;
+  var ty: int64 = 0;
+  if (!read_property(x, prop, &b, &ty)) { return -1; }
+  delete_property(x, prop);
+  if (ty == x->a_incr) {
+    free(b.data);
+    if (!read_incr(x, prop, &b, &ty)) { return -1; }
+  }
+  if (ty == 31) {
+    var u: MythicBytes;
+    latin1_to_utf8(b.data, b.len, &u);
+    free(b.data);
+    b = u;
+  }
+  *out = b;
+  return 1;
+}
+
+fn x11_clipboard_set(self: rawptr, s: uint8*, n: int64) {
+  var x: MythicX11* = (MythicX11*)self;
+  if (!x->opened || x->dead) { return; }
+  if (x->clip != 0) { free(x->clip); }
+  x->clip = (uint8*)malloc(n + 1);
+  for i: int64 in 0..n { x->clip[i] = s[i]; }
+  x->clip[n] = (uint8)0;
+  x->clip_len = n;
+  var t: int64 = x->last_time;
+  set_owner(x, x->a_clipboard, t);
+  set_owner(x, 1, t);
+  var c: int64 = get_owner(x, x->a_clipboard);
+  if (c != x->win && t != 0) {
+    // our last input timestamp predates the current owner's: the server ignored us, so use CurrentTime
+    t = 0;
+    set_owner(x, x->a_clipboard, 0);
+    set_owner(x, 1, 0);
+    c = get_owner(x, x->a_clipboard);
+  }
+  x->own_clip = c == x->win;
+  x->own_primary = get_owner(x, 1) == x->win;
+  x->own_time = t;
+}
+
+fn x11_clipboard_get(self: rawptr, out: MythicBytes*) -> bool {
+  var x: MythicX11* = (MythicX11*)self;
+  out->data = (uint8*)0;
+  out->len = 0;
+  if (!x->opened || x->dead) { return false; }
+  pump_pending(x);
+  if (x->own_clip) {
+    if (x->clip_len == 0) { return false; }
+    out->data = (uint8*)malloc(x->clip_len + 1);
+    for i: int64 in 0..x->clip_len + 1 { out->data[i] = x->clip[i]; }
+    out->len = x->clip_len;
+    return true;
+  }
+  var r: int32 = convert_sel(x, x->a_utf8, out);
+  if (r == 0) { r = convert_sel(x, 31, out); }   // owners without UTF8_STRING: Latin-1 STRING
+  if (r == 1 && out->len == 0) { free(out->data); out->data = (uint8*)0; }
+  return r == 1 && out->len > 0;
+}
 fn x11_getenv(self: rawptr, name: uint8*, n: int64, out: MythicBytes*) -> bool { return mythic_x11_getenv(name, n, out); }
 
 export fn mythic_plat_native_create() -> MythicPlatform* {

@@ -3,6 +3,7 @@
 import "std/mem";
 import "std/io";
 import "mythic_types";
+import "mythic_utf8";
 
 struct W32Point { x: int32; y: int32; }
 struct W32Rect { left: int32; top: int32; right: int32; bottom: int32; }
@@ -55,6 +56,17 @@ extern fn mythic_w32_SetFocus(hwnd: int64) -> int64 = "SetFocus";
 extern fn mythic_w32_GetFocus() -> int64 = "GetFocus";
 extern fn mythic_w32_SetDIBitsToDevice(hdc: int64, x: int32, y: int32, w: uint32, h: uint32, sx: int32, sy: int32, start_scan: uint32, lines: uint32, bits: rawptr, bmi: W32Bmi*, usage: uint32) -> int32 = "SetDIBitsToDevice";
 extern fn mythic_w32_GetDeviceCaps(hdc: int64, index: int32) -> int32 = "GetDeviceCaps";
+extern fn mythic_w32_OpenClipboard(hwnd: int64) -> int32 = "OpenClipboard";
+extern fn mythic_w32_CloseClipboard() -> int32 = "CloseClipboard";
+extern fn mythic_w32_EmptyClipboard() -> int32 = "EmptyClipboard";
+extern fn mythic_w32_SetClipboardData(format: uint32, mem: int64) -> int64 = "SetClipboardData";
+extern fn mythic_w32_GetClipboardData(format: uint32) -> int64 = "GetClipboardData";
+extern fn mythic_w32_GlobalAlloc(flags: uint32, size: int64) -> int64 = "GlobalAlloc";
+extern fn mythic_w32_GlobalLock(mem: int64) -> rawptr = "GlobalLock";
+extern fn mythic_w32_GlobalUnlock(mem: int64) -> int32 = "GlobalUnlock";
+extern fn mythic_w32_GlobalSize(mem: int64) -> int64 = "GlobalSize";
+extern fn mythic_w32_GlobalFree(mem: int64) -> int64 = "GlobalFree";
+extern fn mythic_w32_Sleep(ms: uint32) = "Sleep";
 
 const W32_EQCAP = 4096;
 const W32_STYLE = 0x00CF0000;            // WS_OVERLAPPEDWINDOW
@@ -643,8 +655,86 @@ fn w32_set_cursor(self: rawptr, cursor: int32) {
   mythic_w32_SetCursor(w->cursors[cursor]);
 }
 
-fn w32_clipboard_set(self: rawptr, s: uint8*, n: int64) { }                      // M3
-fn w32_clipboard_get(self: rawptr, out: MythicBytes*) -> bool { return false; }    // M3
+// Another process may hold the clipboard open for a moment, so retry for about 100 ms.
+fn open_clipboard(w: MythicW32*) -> bool {
+  for i in 0..20 {
+    if (mythic_w32_OpenClipboard(w->hwnd) != 0) { return true; }
+    mythic_w32_Sleep((uint32)5);
+  }
+  return false;
+}
+
+// CF_UNICODETEXT is CRLF text: LF becomes CRLF on copy and CRLF becomes LF on paste.
+fn w32_clipboard_set(self: rawptr, s: uint8*, n: int64) {
+  var w: MythicW32* = (MythicW32*)self;
+  if (w->hwnd == 0) { return; }
+  var units: int64 = 1;
+  var i: int64 = 0;
+  var cp: uint32 = 0;
+  while (i < n) {
+    i = mythic_utf8_decode(s, n, i, &cp);
+    units = units + 1;
+    if (cp >= (uint32)0x10000 || cp == (uint32)10) { units = units + 1; }
+  }
+  var mem: int64 = mythic_w32_GlobalAlloc((uint32)2, units * 2);   // GMEM_MOVEABLE
+  if (mem == 0) { return; }
+  var d: uint16* = (uint16*)mythic_w32_GlobalLock(mem);
+  var o: int64 = 0;
+  i = 0;
+  while (i < n) {
+    i = mythic_utf8_decode(s, n, i, &cp);
+    if (cp == (uint32)10 && (o == 0 || d[o - 1] != (uint16)13)) { d[o] = (uint16)13; o = o + 1; }
+    if (cp >= (uint32)0x10000) {
+      cp = cp - (uint32)0x10000;
+      d[o] = (uint16)((uint32)0xD800 + (cp >> (uint32)10));
+      d[o + 1] = (uint16)((uint32)0xDC00 + (cp & (uint32)0x3FF));
+      o = o + 2;
+    } else {
+      d[o] = (uint16)cp;
+      o = o + 1;
+    }
+  }
+  d[o] = (uint16)0;
+  mythic_w32_GlobalUnlock(mem);
+  if (!open_clipboard(w)) { mythic_w32_GlobalFree(mem); return; }
+  mythic_w32_EmptyClipboard();
+  if (mythic_w32_SetClipboardData((uint32)13, mem) == 0) { mythic_w32_GlobalFree(mem); }   // CF_UNICODETEXT
+  mythic_w32_CloseClipboard();
+}
+
+fn w32_clipboard_get(self: rawptr, out: MythicBytes*) -> bool {
+  var w: MythicW32* = (MythicW32*)self;
+  out->data = (uint8*)0;
+  out->len = 0;
+  if (w->hwnd == 0 || !open_clipboard(w)) { return false; }
+  var mem: int64 = mythic_w32_GetClipboardData((uint32)13);
+  var src: uint16* = (uint16*)0;
+  if (mem != 0) { src = (uint16*)mythic_w32_GlobalLock(mem); }
+  if (src == 0) { mythic_w32_CloseClipboard(); return false; }
+  var units: int64 = mythic_w32_GlobalSize(mem) / 2;
+  var n: int64 = 0;
+  while (n < units && src[n] != (uint16)0) { n = n + 1; }
+  var d: uint8* = (uint8*)malloc(n * 3 + 1);
+  var o: int64 = 0;
+  var i: int64 = 0;
+  while (i < n) {
+    var cp: uint32 = (uint32)src[i];
+    i = i + 1;
+    if (cp >= (uint32)0xD800 && cp < (uint32)0xDC00 && i < n && src[i] >= (uint16)0xDC00 && src[i] < (uint16)0xE000) {
+      cp = (uint32)0x10000 + ((cp - (uint32)0xD800) << (uint32)10) + ((uint32)src[i] - (uint32)0xDC00);
+      i = i + 1;
+    }
+    if (cp == (uint32)13 && i < n && src[i] == (uint16)10) { continue; }
+    o = o + (int64)mythic_utf8_encode(cp, &d[o]);    // a lone surrogate encodes as U+FFFD
+  }
+  d[o] = (uint8)0;
+  mythic_w32_GlobalUnlock(mem);
+  mythic_w32_CloseClipboard();
+  if (o == 0) { free(d); return false; }
+  out->data = d;
+  out->len = o;
+  return true;
+}
 
 fn w32_getenv(self: rawptr, name: uint8*, n: int64, out: MythicBytes*) -> bool {
   var cname: uint8* = (uint8*)malloc(n + 1);
