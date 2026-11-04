@@ -11,7 +11,7 @@ struct ScrollRun {
   id: uint64;
   focus_len: int64;              // focus order length at begin: entries after it are inside
   list: bool;
-  next: int64;                   // list: index of the next list_item
+  first: int64; next: int64;     // list: first row built, index of the next list_item
   row_h: float32;
   count: int64; last: int64; ranged: bool;   // set by mythic_list_visible_range
 }
@@ -253,7 +253,12 @@ fn scroll_close(ui: MythicUi*, n: MythicNode*) {
     }
   }
   var st: MythicScrollState* = mythic_map_get<MythicScrollState>(&ui->scrolls, run->id, false);
-  if (!inside) { st->into_view = 0; st->into_wait = 0; return; }
+  if (!inside) {
+    // a focused list keeps its own mark (its active row was shown, mythic_list_begin)
+    if (fid != run->id) { st->into_view = 0; }
+    st->into_wait = 0;
+    return;
+  }
   if (st->into_view == fid) { return; }
   // keyboard focus moved to a child: scroll it into view once (§4); a click does not scroll
   if (!ui->focus_visible) { st->into_view = fid; return; }
@@ -329,8 +334,6 @@ export fn mythic_list_begin(ui: MythicUi*, id_label: string, b: MythicBox) {
   mythic_interact(ui, id, MYTHIC_SENSE_CLICK);
   mythic_focusable(ui, id, fl);
   var st: MythicScrollState* = mythic_map_get<MythicScrollState>(&ui->scrolls, id, false);
-  st->sel = st->sel_next;
-  st->sel_next = -1;
   if (ui->focus_id == id && ui->disabled_depth == 0 && st->count > 0) {
     var a: int64 = st->active;
     var rh: float32 = row_height(st);
@@ -353,10 +356,12 @@ export fn mythic_list_begin(ui: MythicUi*, id_label: string, b: MythicBox) {
     if (a >= st->count) { a = st->count - 1; }
     st->active = a;
     if (moved) { ui->focus_visible = true; }
-    if (moved || ui->activate_id == id) {
+    // keyboard focus arriving (Tab) shows the active row once
+    if (moved || ui->activate_id == id || (ui->focus_visible && st->into_view != id)) {
       // keyboard moves jump, so the active row is built this frame and Enter can reach it
       reveal_row(st, n, a);
       st->base.y = st->target.y;
+      st->into_view = id;
     }
   }
   scroll_step(ui, n);
@@ -379,6 +384,9 @@ fn list_close(ui: MythicUi*, n: MythicNode*, run: ScrollRun*) {
   }
   if (run->row_h > 0.0) { st->row_h = run->row_h; }
   if (st->active >= st->count) { st->active = st->count - 1; }
+  // the selection as last seen: a selected row that is not built keeps it
+  if (st->sel_next >= 0 || (st->sel >= run->first && st->sel < run->next) || st->sel >= st->count) { st->sel = st->sel_next; }
+  st->sel_next = -1;
 }
 
 /// Rows [*first, *last) of a list of `count` rows of height `row_h` that are in view. Call it
@@ -403,6 +411,7 @@ export fn mythic_list_visible_range(ui: MythicUi*, row_h: float32, count: int64,
     var sp: MythicNode* = mythic_ctx_node_add(ui, MYTHIC_NODE_SPACER);
     sp->box.height = mythic_fixed((float32)f * row_h);
   }
+  run->first = f;
   run->next = f;
   run->last = l;
   run->count = count;
