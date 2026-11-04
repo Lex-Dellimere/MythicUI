@@ -20,8 +20,9 @@ _Coming soon._
 - **Fast and quiet.** Only the parts of the window that changed get redrawn. A full 1080p repaint takes about 4 to 6 ms, a frame where nothing changed about 0.3 ms, and an idle app uses 0% CPU.
 - **Layout** with rows and columns, padding, gaps, alignment, and fixed, fit, grow and percent sizes. Text can wrap or cut off with an ellipsis.
 - **Widgets:** labels, headings, buttons (primary, secondary, ghost, danger, three sizes, icons), checkboxes, switches, radio buttons, sliders, single-line text inputs (selection, undo, copy and paste, placeholder, error and read-only states), progress bars, cards and panels, separators and icons.
+- **Scroll views and long lists.** Smooth wheel scrolling, overlay scrollbars that fade out when you're done, and lists that only build the rows on screen, so 100k rows is fine.
 - **Animated states.** Hover, press, focus and disabled all animate smoothly. There's a reduced motion option.
-- **Keyboard support.** Tab and Shift+Tab move focus, Enter and Space activate, arrow keys work in radio groups and sliders, and text inputs have the usual editing keys.
+- **Keyboard support.** Tab and Shift+Tab move focus (and scroll the focused widget into view), Enter and Space activate, arrow keys work in radio groups, sliders and lists, and text inputs have the usual editing keys.
 - **HiDPI.** Everything scales with the screen DPI.
 
 ## Getting started
@@ -60,6 +61,20 @@ if (mythic_text_input_ex(ui, "Name", &app->name, { placeholder: "Ada Lovelace" }
 if (mythic_last(ui).submitted) { save(app); }    // Enter was pressed
 ```
 
+A scroll view is a container: open it with `mythic_scroll_begin(ui, "log", { height: mythic_grow() })` and close it with `mythic_end(ui)`. A list asks which rows are on screen and builds only those:
+
+```mettle
+mythic_list_begin(ui, "files", { width: mythic_grow(), height: mythic_grow() });
+  var first: int64 = 0; var last: int64 = 0;
+  mythic_list_visible_range(ui, 32, app->count, &first, &last);
+  for i: int64 in first..last {
+    mythic_push_id_int(ui, i);
+    if (mythic_list_item(ui, app->names[i], i == app->selected)) { app->selected = i; }
+    mythic_pop_id(ui);
+  }
+mythic_end(ui);
+```
+
 Build it:
 
 ```sh
@@ -90,7 +105,6 @@ MythicUI ships Inter and JetBrains Mono (subset, in `assets/fonts`). Both are un
 
 MythicUI is still being built. These are the next things to land:
 
-- Scroll views and long lists (only the visible rows get built, so 100k rows is fine)
 - Tabs and tooltips
 - A nicer method-style API with callbacks: `ui->button("Save")`, `ui->on_click(fn() { save(app); })`
 - Proper group opacity for disabled widgets

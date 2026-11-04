@@ -1,6 +1,6 @@
 // mythic_layout (W-C): declarative tree + multi-pass layout (DECISIONS §3).
 // Passes: fit widths (pref + min content), resolve widths (fixed, percent, grow, shrink, min/max),
-// wrap text, fit heights, resolve heights, position. Scroll and floating arrive in M3.
+// wrap text, fit heights, resolve heights, position (scroll offsets, clips).
 import "mythic_base";
 import "mythic_types";
 import "mythic_ctx";
@@ -22,10 +22,12 @@ export fn mythic_box_begin(ui: MythicUi*, b: MythicBox) {
   ui->cur = n;
 }
 
-/// Closes the innermost open container.
+/// Closes the innermost open container (any kind: box, card, scroll view, list).
 export fn mythic_end(ui: MythicUi*) {
   var n: MythicNode* = ui->cur;
   if (n == 0 || n == ui->root) { return; }
+  var mythic_end_cb: fn(MythicUi*, MythicNode*) -> void = n->end_cb;
+  if (mythic_end_cb != 0) { n->end_cb = 0; mythic_end_cb(ui, n); }
   if (n->box.id != 0) { mythic_pop_id(ui); }
   ui->last_node = n;
   ui->cur = n->parent;
@@ -138,6 +140,8 @@ fn cmin(n: MythicNode*, ax: int32) -> float32 {
   return clamp_sz(s, mythic_minf(minv(n, ax), fitv(n, ax)));
 }
 
+fn scrolls(n: MythicNode*, ax: int32) -> bool { if (ax == 0) { return n->box.scroll_x; } return n->box.scroll_y; }
+
 fn shrinkable(n: MythicNode*, ax: int32) -> bool {
   var m: int32 = sz(n, ax).mode;
   return m == MYTHIC_FIT || m == MYTHIC_GROW;
@@ -147,6 +151,8 @@ fn shrinkable(n: MythicNode*, ax: int32) -> bool {
 
 fn fit_pass(n: MythicNode*, ax: int32) {
   var c: MythicNode* = n->first;
+  while (c != 0) { fit_pass(c, ax); c = c->next; }
+  c = n->over;
   while (c != 0) { fit_pass(c, ax); c = c->next; }
   if (n->kind == MYTHIC_NODE_TEXT) { return; }
   if (n->kind != MYTHIC_NODE_BOX) { set_fit(n, ax, 0.0, 0.0); return; }
@@ -174,9 +180,27 @@ fn fit_pass(n: MythicNode*, ax: int32) {
 
 // ---------------------------------------------------------------- passes 2 and 5: resolve sizes top-down
 
+// overlay children are sized against the whole node, outside the flow
+fn resolve_over(n: MythicNode*, ax: int32) {
+  var c: MythicNode* = n->over;
+  while (c != 0) {
+    var s: MythicSize = sz(c, ax);
+    var v: float32 = fitv(c, ax);
+    if (s.mode == MYTHIC_FIXED) { v = s.value; }
+    else if (s.mode == MYTHIC_PERCENT) { v = s.value * len(n, ax); }
+    else if (s.mode == MYTHIC_GROW) { v = len(n, ax); }
+    set_len(c, ax, clamp_sz(s, v));
+    resolve_pass(c, ax);
+    c = c->next;
+  }
+}
+
 fn resolve_pass(n: MythicNode*, ax: int32) {
+  if (n->over != 0) { resolve_over(n, ax); }
   if (n->first == 0) { return; }
   var inner: float32 = mythic_maxf(0.0, len(n, ax) - pad0(n, ax) - pad1(n, ax));
+  // a scroll axis lays the children out unconstrained: the content is at least its fit size
+  if (scrolls(n, ax)) { inner = mythic_maxf(inner, fitv(n, ax) - pad0(n, ax) - pad1(n, ax)); }
   var along: bool = main_ax(n) == ax;
   var c: MythicNode* = n->first;
   if (!along) {
@@ -314,12 +338,33 @@ fn isect(a: MythicRect, b: MythicRect) -> MythicRect {
 
 // NOTE: written without the axis helpers on purpose: mettle 0.17 --release merged
 // `len(n, m)` and `len(n, x)` (same callee, different axis argument) into one value here.
+fn position_over(n: MythicNode*, cc: MythicRect) {
+  var r: MythicRect = n->rect;
+  var c: MythicNode* = n->over;
+  while (c != 0) {
+    c->rect.x = r.x; c->rect.y = r.y;
+    if (c->box.align_x == MYTHIC_ALIGN_CENTER) { c->rect.x = r.x + (r.w - c->rect.w) / 2.0; }
+    else if (c->box.align_x == MYTHIC_ALIGN_END) { c->rect.x = r.x + r.w - c->rect.w; }
+    if (c->box.align_y == MYTHIC_ALIGN_CENTER) { c->rect.y = r.y + (r.h - c->rect.h) / 2.0; }
+    else if (c->box.align_y == MYTHIC_ALIGN_END) { c->rect.y = r.y + r.h - c->rect.h; }
+    c->clip = cc;
+    position_pass(c);
+    c = c->next;
+  }
+}
+
 fn position_pass(n: MythicNode*) {
   var cc: MythicRect = n->clip;
   if (n->box.clip) { cc = isect(cc, n->rect); }
+  var r: MythicRect = n->rect;
+  if (n->box.scroll_x || n->box.scroll_y) {
+    n->content.x = r.w; n->content.y = r.h;
+    if (n->box.scroll_x) { n->content.x = mythic_maxf(r.w, n->fit.x); }
+    if (n->box.scroll_y) { n->content.y = mythic_maxf(r.h, n->fit.y); }
+  }
+  if (n->over != 0) { position_over(n, cc); }
   if (n->first == 0) { return; }
   var row: bool = n->box.dir == MYTHIC_DIR_ROW;
-  var r: MythicRect = n->rect;
   var pd: MythicInsets = n->box.pad;
   var m0: float32 = r.y + pd.t; var m_inner: float32 = r.h - pd.t - pd.b;
   var x0: float32 = r.x + pd.l; var x_inner: float32 = r.w - pd.l - pd.r;
@@ -352,6 +397,8 @@ fn position_pass(n: MythicNode*) {
     if (ac == MYTHIC_ALIGN_CENTER) { off = (x_inner - cx) / 2.0; }
     else if (ac == MYTHIC_ALIGN_END) { off = x_inner - cx; }
     if (row) { c->rect.x = at; c->rect.y = x0 + off; } else { c->rect.y = at; c->rect.x = x0 + off; }
+    c->rect.x = c->rect.x - n->scroll.x;
+    c->rect.y = c->rect.y - n->scroll.y;
     c->clip = cc;
     at = at + cm + n->box.gap;
     position_pass(c);
@@ -410,10 +457,12 @@ fn paint_node(ui: MythicUi*, p: MythicPainter*, n: MythicNode*) {
   var mythic_paint_cb: fn(MythicUi*, MythicPainter*, MythicRect, rawptr) -> void = n->paint;
   if (mythic_paint_cb != 0) { mythic_paint_cb(ui, p, n->rect, n->paint_data); }
   p->opacity = saved;
-  if (n->first == 0) { return; }
+  if (n->first == 0 && n->over == 0) { return; }
   var clip: bool = b->clip && n->kind == MYTHIC_NODE_BOX;
   if (clip) { mythic_dl_push_clip(p->dl, mythic_paint_dev_rect(p, n->rect), b->radius.tl * p->scale); }
   var c: MythicNode* = n->first;
+  while (c != 0) { paint_node(ui, p, c); c = c->next; }
+  c = n->over;
   while (c != 0) { paint_node(ui, p, c); c = c->next; }
   if (clip) { mythic_dl_pop_clip(p->dl); }
 }

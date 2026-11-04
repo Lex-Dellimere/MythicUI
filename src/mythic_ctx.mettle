@@ -46,7 +46,8 @@ export struct MythicInput {
   mouse_down: bool[4];             // index = MythicEvent.button
   mouse_pressed: bool[4];
   mouse_released: bool[4];
-  wheel: MythicVec2;
+  wheel: MythicVec2;                 // notches, +y = up (Shift+wheel arrives as x)
+  wheel_px: MythicVec2;              // precise deltas (logical px, same signs), applied unsmoothed
   mods: int32;
   keys: MythicVec<MythicKeyEvent>;
   text: MythicVec<uint32>;
@@ -84,9 +85,27 @@ export struct MythicNode {
   paint: fn(MythicUi*, MythicPainter*, MythicRect, rawptr) -> void;   // custom paint (mythic_node_paint)
   paint_data: rawptr;
   frozen: bool;                    // layout scratch (grow distribution)
+  scroll: MythicVec2;                // scroll offset of the children (whole device px)
+  over: MythicNode*;                 // overlay children (scrollbars): sized against this node's rect,
+                                   // outside the flow, drawn and hit-tested above it
+  end_cb: fn(MythicUi*, MythicNode*) -> void;   // run by mythic_end (scroll view, list)
+  ext: rawptr;                     // widget data of an open container (frame arena)
 }
 
 export struct MythicHit { id: uint64; rect: MythicRect; }
+
+// one scroll view or list (mythic_w_scroll). content / view / rect / vis / laid come from the
+// latest completed layout. A settle pass steps the smoothing from `base` again, so it never
+// moves twice in one frame.
+export struct MythicScrollState {
+  last_frame: int64;                 // first field: GC stamp (see gc_keep)
+  off: MythicVec2; target: MythicVec2; base: MythicVec2; base_frame: int64;
+  content: MythicVec2; view: MythicVec2; rect: MythicRect; vis: MythicRect; laid: MythicVec2;
+  shown_us: int64;                   // last scroll, bar hover or drag: auto-hide counts from here
+  drag: int32; grab: float32;        // thumb being dragged (1 = x, 2 = y), pointer offset into it
+  into_view: uint64; into_wait: uint64;    // focus scrolled into view / waiting for its rect
+  active: int64; count: int64; row_h: float32; sel: int64; sel_next: int64;   // list
+}
 
 // per-ID tween (mythic_anim); lives here because MythicUi owns the map
 export struct MythicTween { last_frame: int64; value: float32; from: float32; target: float32;
@@ -119,6 +138,10 @@ export struct MythicUi {
   in: MythicInput;
   id_stack: MythicVec<uint64>;
   states: MythicMap<MythicWState>;
+  scrolls: MythicMap<MythicScrollState>;
+  scroll_ids: MythicVec<uint64>;     // scroll views of the latest layout, outermost first
+  wheel_id: uint64;                // scroll view that takes this frame's wheel
+  scroll_hover_id: uint64;         // topmost scroll view under the pointer
   tweens: MythicMap<MythicTween>;
   anim_active: bool;               // a tween was unsettled during this frame
   anim_prev: bool;                 // ... during the previous frame
@@ -135,6 +158,8 @@ export struct MythicUi {
   pass_focus: uint64;              // focus_id when this pass began
   activate_id: uint64;
   focus_visible: bool;
+  focus_rect: MythicRect;            // unclipped rect of the focused node in the latest layout
+  focus_rect_id: uint64;
   focus_a: MythicVec<MythicFocusEnt>;
   focus_b: MythicVec<MythicFocusEnt>;
   focus_cur: MythicVec<MythicFocusEnt>*;   // this frame's order (rebuilt every pass)
@@ -194,6 +219,8 @@ export fn mythic_ctx_destroy(ui: MythicUi*) {
   mythic_vec_free<uint32>(&ui->in.text);
   mythic_map_free<MythicWState>(&ui->states);
   mythic_map_free<MythicTween>(&ui->tweens);
+  mythic_map_free<MythicScrollState>(&ui->scrolls);
+  mythic_vec_free<uint64>(&ui->scroll_ids);
   mythic_edit_clear(ui);
   free((rawptr)ui);
 }
@@ -202,6 +229,7 @@ export fn mythic_ctx_destroy(ui: MythicUi*) {
 export fn mythic_ctx_input_begin(ui: MythicUi*) {
   for i: int32 in 0..4 { ui->in.mouse_pressed[i] = false; ui->in.mouse_released[i] = false; }
   ui->in.wheel.x = 0.0; ui->in.wheel.y = 0.0;
+  ui->in.wheel_px.x = 0.0; ui->in.wheel_px.y = 0.0;
   mythic_vec_clear<MythicKeyEvent>(&ui->in.keys);
   mythic_vec_clear<uint32>(&ui->in.text);
 }
@@ -247,8 +275,14 @@ export fn mythic_ctx_feed(ui: MythicUi*, ev: MythicEvent*) -> bool {
       ui->in.mouse_released[b] = true;
     }
   } else if (k == MYTHIC_EV_WHEEL) {
-    ui->in.wheel.x = ui->in.wheel.x + ev->wheel_x;
-    ui->in.wheel.y = ui->in.wheel.y + ev->wheel_y;
+    var wx: float32 = ev->wheel_x;
+    var wy: float32 = ev->wheel_y;
+    if ((ev->mods & MYTHIC_MOD_SHIFT) != 0 && wx == 0.0) { wx = -wy; wy = 0.0; }
+    if (ev->precise) {
+      ui->in.wheel_px.x = ui->in.wheel_px.x + wx / s; ui->in.wheel_px.y = ui->in.wheel_px.y + wy / s;
+    } else {
+      ui->in.wheel.x = ui->in.wheel.x + wx; ui->in.wheel.y = ui->in.wheel.y + wy;
+    }
   } else if (k == MYTHIC_EV_KEY_DOWN) {
     // Tab moves focus at frame begin, before anything else this frame is applied
     if (ev->key == MYTHIC_KEY_TAB && (ui->in.keys.len > 0 || ui->in.text.len > 0)) { return false; }
@@ -329,6 +363,7 @@ export fn mythic_ctx_frame_begin(ui: MythicUi*, now_us: int64) {
   ui->focus_seen = false;
   ui->focus_claimed = false;
   ui->hovered_id = hit_test(ui, ui->hits_prev);
+  scroll_route(ui);
   var ft: MythicVec<MythicFocusEnt>* = ui->focus_prev;
   ui->focus_prev = ui->focus_cur;
   ui->focus_cur = ft;
@@ -337,6 +372,7 @@ export fn mythic_ctx_frame_begin(ui: MythicUi*, now_us: int64) {
     g_gc_cut = ui->frame - 600;
     mythic_map_sweep<MythicWState>(&ui->states, &gc_keep);
     mythic_map_sweep<MythicTween>(&ui->tweens, &gc_keep);
+    mythic_map_sweep<MythicScrollState>(&ui->scrolls, &gc_keep);
   }
 }
 
@@ -366,25 +402,83 @@ export fn mythic_ctx_pass_begin(ui: MythicUi*) {
   ui->last = z;
 }
 
+fn clip_rect(r: MythicRect, c: MythicRect) -> MythicRect {
+  var x0: float32 = mythic_maxf(r.x, c.x); var y0: float32 = mythic_maxf(r.y, c.y);
+  var x1: float32 = mythic_minf(r.x + r.w, c.x + c.w); var y1: float32 = mythic_minf(r.y + r.h, c.y + c.h);
+  var o: MythicRect = { x: x0, y: y0, w: mythic_maxf(0.0, x1 - x0), h: mythic_maxf(0.0, y1 - y0) };
+  return o;
+}
+
+fn in_rect(r: MythicRect, p: MythicVec2) -> bool { return p.x >= r.x && p.y >= r.y && p.x < r.x + r.w && p.y < r.y + r.h; }
+
+// a laid-out scroll view: keep its sizes for the next pass and frame (wheel routing, clamping)
+fn scroll_laid(ui: MythicUi*, n: MythicNode*) {
+  var st: MythicScrollState* = mythic_map_get<MythicScrollState>(&ui->scrolls, n->box.id, false);
+  if (st == 0) { return; }
+  mythic_vec_push<uint64>(&ui->scroll_ids, n->box.id);
+  var mx: float32 = mythic_maxf(0.0, n->content.x - n->rect.w);
+  var my: float32 = mythic_maxf(0.0, n->content.y - n->rect.h);
+  // a new or resized view (a list builds rows for it) or an offset past the new end: lay out again
+  if (st->view.x != n->rect.w || st->view.y != n->rect.h || st->off.x > mx + 0.01 || st->off.y > my + 0.01) { ui->repass = true; }
+  st->content = n->content;
+  st->view.x = n->rect.w; st->view.y = n->rect.h;
+  st->rect = n->rect;
+  st->vis = clip_rect(n->rect, n->clip);
+  st->laid = n->scroll;
+}
+
 fn collect_hits(ui: MythicUi*, n: MythicNode*) {
   if (n->hit_id != 0) {
-    var r: MythicRect = n->rect;
-    var c: MythicRect = n->clip;
-    var x0: float32 = mythic_maxf(r.x, c.x); var y0: float32 = mythic_maxf(r.y, c.y);
-    var x1: float32 = mythic_minf(r.x + r.w, c.x + c.w); var y1: float32 = mythic_minf(r.y + r.h, c.y + c.h);
-    if (x1 > x0 && y1 > y0) {
-      var h: MythicHit = { id: n->hit_id, rect: { x: x0, y: y0, w: x1 - x0, h: y1 - y0 } };
+    var c: MythicRect = clip_rect(n->rect, n->clip);
+    if (c.w > 0.0 && c.h > 0.0) {
+      var h: MythicHit = { id: n->hit_id, rect: c };
       mythic_vec_push<MythicHit>(ui->hits_cur, h);
     }
   }
+  if (ui->focus_id != 0 && (n->nid == ui->focus_id || n->hit_id == ui->focus_id)) {
+    ui->focus_rect = n->rect;
+    ui->focus_rect_id = ui->focus_id;
+  }
+  if (n->box.id != 0 && (n->box.scroll_x || n->box.scroll_y)) { scroll_laid(ui, n); }
   var ch: MythicNode* = n->first;
   while (ch != 0) { collect_hits(ui, ch); ch = ch->next; }
+  ch = n->over;
+  while (ch != 0) { collect_hits(ui, ch); ch = ch->next; }
+}
+
+// the wheel goes to the topmost scroll view under the pointer that can still move that way (§3)
+fn scroll_route(ui: MythicUi*) {
+  ui->wheel_id = 0;
+  ui->scroll_hover_id = 0;
+  if (!ui->in.mouse_inside) { return; }
+  // direction of the offset change: +x = right, +y = down
+  var dx: float32 = ui->in.wheel.x + ui->in.wheel_px.x;
+  var dy: float32 = -(ui->in.wheel.y + ui->in.wheel_px.y);
+  var i: int64 = ui->scroll_ids.len - 1;
+  while (i >= 0) {
+    var id: uint64 = ui->scroll_ids.data[i];
+    var st: MythicScrollState* = mythic_map_get<MythicScrollState>(&ui->scrolls, id, false);
+    if (st != 0 && in_rect(st->vis, ui->in.mouse)) {
+      if (ui->scroll_hover_id == 0) { ui->scroll_hover_id = id; }
+      if (dx == 0.0 && dy == 0.0) { return; }
+      var mx: float32 = st->content.x - st->view.x;
+      var my: float32 = st->content.y - st->view.y;
+      if ((dy < 0.0 && st->target.y > 0.0) || (dy > 0.0 && st->target.y < my) ||
+          (dx < 0.0 && st->target.x > 0.0) || (dx > 0.0 && st->target.x < mx)) {
+        ui->wheel_id = id;
+        return;
+      }
+    }
+    i = i - 1;
+  }
 }
 
 /// Ends a UI pass (after layout): rebuilds this frame's hit list, re-hit-tests, and returns
 /// true when the frame callback must run again before presenting (settle pass, §3; max 2).
 export fn mythic_ctx_pass_end(ui: MythicUi*) -> bool {
   mythic_vec_clear<MythicHit>(ui->hits_cur);
+  mythic_vec_clear<uint64>(&ui->scroll_ids);
+  ui->focus_rect_id = 0;
   collect_hits(ui, ui->root);
   var nh: uint64 = hit_test(ui, ui->hits_cur);
   if (ui->pass == 0) {
@@ -399,6 +493,7 @@ export fn mythic_ctx_pass_end(ui: MythicUi*) -> bool {
     mythic_vec_clear<MythicKeyEvent>(&ui->in.keys);
     mythic_vec_clear<uint32>(&ui->in.text);
     ui->in.wheel.x = 0.0; ui->in.wheel.y = 0.0;
+    ui->in.wheel_px.x = 0.0; ui->in.wheel_px.y = 0.0;
     ui->activate_id = 0;
   }
   var again: bool = nh != ui->hovered_id || ui->repass || (ui->frame == 1 && ui->pass == 0);
@@ -428,6 +523,23 @@ export fn mythic_ctx_node_add(ui: MythicUi*, kind: int32) -> MythicNode* {
   p->last = n;
   n->nid = mythic_hash_u64(p->nid, (uint64)p->child_count);
   p->child_count = p->child_count + 1;
+  ui->last_node = n;
+  return n;
+}
+
+/// Appends an overlay child to the open container (see MythicNode.over).
+export fn mythic_ctx_overlay_add(ui: MythicUi*) -> MythicNode* {
+  var n: MythicNode* = (MythicNode*)mythic_arena_alloc_zero(ui->arena, sizeof(MythicNode));
+  n->opacity = ui->opacity;
+  var p: MythicNode* = ui->cur;
+  n->parent = p;
+  n->nid = mythic_hash_u64(p->nid, (uint64)p->child_count);
+  p->child_count = p->child_count + 1;
+  if (p->over == 0) { p->over = n; } else {
+    var o: MythicNode* = p->over;
+    while (o->next != 0) { o = o->next; }
+    o->next = n;
+  }
   ui->last_node = n;
   return n;
 }
