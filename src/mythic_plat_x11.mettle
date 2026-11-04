@@ -11,7 +11,7 @@ const X_RQCAP = 1024;            // parked raw event packets (32 bytes each)
 const X_EQCAP = 4096;            // translated MythicEvents
 const X_STRIP_BYTES = 262144;    // PutImage strip request size
 const X_EVENT_MASK = 6455423;    // key, button, enter/leave, motion, exposure, structure, focus, property
-const X_SEL_TIMEOUT_MS = 300;    // paste: wait for SelectionNotify
+const X_SEL_TIMEOUT_MS = 500;    // paste: wait for SelectionNotify
 const X_INCR_TIMEOUT_MS = 1000;  // paste: wait for each INCR chunk
 
 export struct MythicX11 {

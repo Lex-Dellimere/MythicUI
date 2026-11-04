@@ -679,6 +679,7 @@ fn w32_clipboard_set(self: rawptr, s: uint8*, n: int64) {
   var mem: int64 = mythic_w32_GlobalAlloc((uint32)2, units * 2);   // GMEM_MOVEABLE
   if (mem == 0) { return; }
   var d: uint16* = (uint16*)mythic_w32_GlobalLock(mem);
+  if (d == 0) { mythic_w32_GlobalFree(mem); return; }
   var o: int64 = 0;
   i = 0;
   while (i < n) {
