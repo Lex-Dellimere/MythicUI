@@ -52,6 +52,7 @@ export struct MythicInput {
   keys: MythicVec<MythicKeyEvent>;
   text: MythicVec<uint32>;
   mouse_inside: bool;
+  key_downs: int32;                // key presses fed this frame, including ones a widget consumed
 }
 
 export struct MythicResp { id: uint64; rect: MythicRect; hovered: bool; pressed: bool; clicked: bool;
@@ -90,7 +91,9 @@ export struct MythicNode {
                                    // outside the flow, drawn and hit-tested above it
   end_cb: fn(MythicUi*, MythicNode*) -> void;   // run by mythic_end (scroll view, list)
   ext: rawptr;                     // widget data of an open container (frame arena)
-  hidden: bool;                    // floating root whose target was not declared: not laid out or drawn
+  hidden: bool;                    // floating root whose target was not declared, or inside such a root:
+                                   // not laid out, drawn or in the Tab order
+  float_shift: float32;            // floating root: extra dy applied after the flip decision
 }
 
 export struct MythicHit { id: uint64; rect: MythicRect; }
@@ -240,6 +243,7 @@ export fn mythic_ctx_input_begin(ui: MythicUi*) {
   ui->in.wheel_px.x = 0.0; ui->in.wheel_px.y = 0.0;
   mythic_vec_clear<MythicKeyEvent>(&ui->in.keys);
   mythic_vec_clear<uint32>(&ui->in.text);
+  ui->in.key_downs = 0;
 }
 
 /// Feeds one platform event. Returns false when the event must wait for the next frame
@@ -297,6 +301,7 @@ export fn mythic_ctx_feed(ui: MythicUi*, ev: MythicEvent*) -> bool {
     ui->in.mods = ev->mods;
     var ke: MythicKeyEvent = { key: ev->key, mods: ev->mods, repeat: ev->repeat };
     mythic_vec_push<MythicKeyEvent>(&ui->in.keys, ke);
+    ui->in.key_downs = ui->in.key_downs + 1;
   } else if (k == MYTHIC_EV_KEY_UP) {
     ui->in.mods = ev->mods;
   } else if (k == MYTHIC_EV_TEXT) {
@@ -478,6 +483,33 @@ fn collect_float_hits(ui: MythicUi*) {
   }
 }
 
+fn drop_focus(ui: MythicUi*, id: uint64) {
+  if (id == 0) { return; }
+  var o: MythicVec<MythicFocusEnt>* = ui->focus_cur;
+  var k: int64 = 0;
+  for i: int64 in 0..o->len {
+    if (o->data[i].id != id) { o->data[k] = o->data[i]; k = k + 1; }
+  }
+  o->len = k;
+  if (ui->focus_id == id) { ui->focus_id = 0; }
+}
+
+fn drop_focus_tree(ui: MythicUi*, n: MythicNode*) {
+  drop_focus(ui, n->hit_id);
+  if (n->box.id != n->hit_id) { drop_focus(ui, n->box.id); }
+  var ch: MythicNode* = n->first;
+  while (ch != 0) { drop_focus_tree(ui, ch); ch = ch->next; }
+  ch = n->over;
+  while (ch != 0) { drop_focus_tree(ui, ch); ch = ch->next; }
+}
+
+// widgets inside a hidden floating root are not shown: they leave the Tab order and lose focus
+fn drop_hidden_focus(ui: MythicUi*) {
+  for i: int64 in 0..ui->floats.len {
+    if (ui->floats.data[i]->hidden) { drop_focus_tree(ui, ui->floats.data[i]); }
+  }
+}
+
 // the wheel goes to the topmost scroll view under the pointer that can still move that way (§3)
 fn scroll_route(ui: MythicUi*) {
   ui->wheel_id = 0;
@@ -513,6 +545,7 @@ export fn mythic_ctx_pass_end(ui: MythicUi*) -> bool {
   ui->focus_rect_id = 0;
   collect_hits(ui, ui->root, true);
   collect_float_hits(ui);
+  drop_hidden_focus(ui);
   var nh: uint64 = hit_test(ui, ui->hits_cur);
   if (ui->pass == 0) {
     // input transitions are consumed by the first pass only: clicks never double-fire
@@ -567,8 +600,14 @@ export fn mythic_ctx_float_add(ui: MythicUi*) -> MythicNode* {
   n->opacity = ui->opacity;
   var p: MythicNode* = ui->cur;
   n->parent = p;
-  // no child index: a tooltip coming and going must not shift its siblings' anonymous IDs
-  n->nid = mythic_hash_u64(p->nid ^ (uint64)0x666C6F6174, (uint64)ui->floats.len);
+  // no child index: a tooltip coming and going must not shift its siblings' anonymous IDs. An
+  // anonymous root counts only the anonymous roots of the same parent (a root with box.id gets
+  // that as its nid in mythic_box_begin)
+  var k: int64 = 0;
+  for i: int64 in 0..ui->floats.len {
+    if (ui->floats.data[i]->parent == p && ui->floats.data[i]->box.id == 0) { k = k + 1; }
+  }
+  n->nid = mythic_hash_u64(p->nid ^ (uint64)0x666C6F6174, (uint64)k);
   mythic_vec_push<MythicNode*>(&ui->floats, n);
   ui->last_node = n;
   return n;

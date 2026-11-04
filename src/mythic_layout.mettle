@@ -461,6 +461,12 @@ fn overflow(y: float32, h: float32, lo: float32, hi: float32) -> float32 {
 }
 
 fn float_lay(ui: MythicUi*, n: MythicNode*, sc: float32) {
+  // a root declared inside a hidden root is hidden with it
+  var up: MythicNode* = n->parent;
+  while (up != 0) {
+    if (up->hidden) { n->hidden = true; return; }
+    up = up->parent;
+  }
   var f: MythicFloat = n->box.floating;
   var win: MythicRect = ui->root->rect;
   var t: MythicRect = win;
@@ -476,6 +482,9 @@ fn float_lay(ui: MythicUi*, n: MythicNode*, sc: float32) {
     }
     if (tn == 0) { n->hidden = true; return; }
     t = tn->rect;
+    // a target cut by a scroll view or clip: place against the part that shows
+    var vis: MythicRect = isect(t, tn->clip);
+    if (vis.w > 0.0 && vis.h > 0.0) { t = vis; }
   }
   fit_pass(n, 0);
   float_size(n, 0, win.w);
@@ -488,14 +497,16 @@ fn float_lay(ui: MythicUi*, n: MythicNode*, sc: float32) {
   var h: float32 = n->rect.h;
   var m: float32 = mythic_maxf(0.0, f.clamp_margin);
   var pos: MythicVec2 = place(t, f.target_anchor, f.self_anchor, f.dx, f.dy, w, h);
+  var shift: float32 = n->float_shift;
   if (f.flip_y) {
     // mirror vertically when that leaves less of it outside the window
     var over0: float32 = overflow(pos.y, h, win.y + m, win.y + win.h - m);
     if (over0 > 0.0) {
       var q: MythicVec2 = place(t, flip_anchor(f.target_anchor), flip_anchor(f.self_anchor), f.dx, -f.dy, w, h);
-      if (overflow(q.y, h, win.y + m, win.y + win.h - m) < over0) { pos = q; }
+      if (overflow(q.y, h, win.y + m, win.y + win.h - m) < over0) { pos = q; shift = -shift; }
     }
   }
+  pos.y = pos.y + shift;
   // clamp inside the window less the margin (a box larger than that sticks to the near edge)
   pos.x = mythic_maxf(win.x + m, mythic_minf(pos.x, win.x + win.w - m - w));
   pos.y = mythic_maxf(win.y + m, mythic_minf(pos.y, win.y + win.h - m - h));

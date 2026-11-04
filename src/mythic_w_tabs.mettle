@@ -49,16 +49,21 @@ fn tabs_paint(ui: MythicUi*, p: MythicPainter*, r: MythicRect, data: rawptr) {
     else { mythic_paint_fill_exact(p, ir, mythic_radius(1.0), d->ind); }
     mythic_dl_pop_clip(p->dl);
   }
-  // focus ring: the tab rect grown 6 px sideways, inset 4 px top and 6 px bottom, radius 6
+  // focus ring: the tab rect grown 6 px sideways, inset 4 px top and 6 px bottom, radius 6. Tabs
+  // the list cuts off get none, and a cut one's ring ends 6 px past the list
+  var rr: MythicRect = { x: r.x - 6.0, y: r.y, w: r.w + 12.0, h: r.h };
+  mythic_dl_push_clip(p->dl, mythic_paint_dev_rect(p, rr), 0.0);
   for i: int32 in 0..d->n {
     var a: float32 = d->focus[i];
     if (a <= 0.0) { continue; }
     var tr: MythicRect = d->items[i]->rect;
+    if (tr.x >= r.x + r.w) { continue; }
     var fr: MythicRect = { x: tr.x - 6.0, y: tr.y + 4.0, w: tr.w + 12.0, h: tr.h - 10.0 };
     var rc: float32 = (float32)(d->ring >> 24) * mythic_clampf(a, 0.0, 1.0);
     var col: uint32 = ((uint32)mythic_iround(rc) << 24) | (d->ring & (uint32)0x00FFFFFF);
     mythic_paint_stroke(p, fr, mythic_radius(6.0), 2.0, col);
   }
+  mythic_dl_pop_clip(p->dl);
 }
 
 fn tab_off(o: MythicTabsOpts, i: int32) -> bool {

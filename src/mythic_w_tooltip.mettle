@@ -27,15 +27,21 @@ export fn mythic_tooltip(ui: MythicUi*, text: string) -> bool {
   var now: int64 = ui->time_us;
   var trig: bool = (target.hovered || (target.focused && ui->focus_visible)) && !ui->deactivated && ui->disabled_depth == 0;
   var shown: bool = (st->flags & TIP_SHOWN) != 0;
+  // input is applied on the first pass only
+  var wheel: bool = false;
+  if (ui->pass == 0) {
+    wheel = ui->in.wheel.x != 0.0 || ui->in.wheel.y != 0.0 || ui->in.wheel_px.x != 0.0 || ui->in.wheel_px.y != 0.0;
+  }
+  // scrolling ends warm mode: items moving under a still pointer don't show theirs at once
+  if (wheel) { ui->tip_closed_us = 0; }
   if (trig) {
     if (st->i[0] == 0) { st->i[0] = now; st->i[1] = ui->frame; }
-    // input is applied on the first pass only; a key press that started this trigger (the Tab
-    // that focused the item) does not count
+    // a key press that started this trigger (the Tab that focused the item) does not count; one
+    // the item consumed (an arrow key on tabs) does
     if (ui->pass == 0) {
       var press: bool = ui->in.mouse_pressed[1] || ui->in.mouse_pressed[2] || ui->in.mouse_pressed[3] || target.pressed;
-      var wheel: bool = ui->in.wheel.x != 0.0 || ui->in.wheel.y != 0.0 || ui->in.wheel_px.x != 0.0 || ui->in.wheel_px.y != 0.0;
       if (shown && mythic_key_consume(ui, MYTHIC_KEY_ESCAPE, -1)) { st->flags = st->flags | TIP_DISMISSED; }
-      if (press || wheel || (ui->in.keys.len > 0 && st->i[1] < ui->frame)) { st->flags = st->flags | TIP_DISMISSED; }
+      if (press || wheel || (ui->in.key_downs > 0 && st->i[1] < ui->frame)) { st->flags = st->flags | TIP_DISMISSED; }
     }
   } else {
     st->i[0] = 0;
@@ -56,7 +62,7 @@ export fn mythic_tooltip(ui: MythicUi*, text: string) -> bool {
     ui->tip_open_frame = ui->frame;
   } else if (shown) {
     st->flags = st->flags & ~TIP_SHOWN;
-    ui->tip_closed_us = now;
+    if (!wheel) { ui->tip_closed_us = now; }
     if (ui->tip_open == id) { ui->tip_open = 0; }
   }
   // in: 120 ms `out`, alpha and a 4 px move toward the item; out: 80 ms linear, alpha only
@@ -83,13 +89,14 @@ export fn mythic_tooltip(ui: MythicUi*, text: string) -> bool {
   b.floating.target = target.id;
   b.floating.self_anchor = 1;
   b.floating.target_anchor = 7;
-  b.floating.dy = 6.0 + shift;
+  b.floating.dy = 6.0;
   b.floating.z = TIP_Z;
   b.floating.flip_y = true;
   b.floating.passthrough = true;
   b.floating.clamp_margin = 8.0;
   mythic_opacity_push(ui, a);
   mythic_box_begin(ui, b);
+  ui->cur->float_shift = shift;
   var ts: MythicTextStyle = t->type.caption_strong;
   ts.flags = MYTHIC_TEXT_WRAP;
   mythic_text(ui, text, ts, c->text_tooltip);
