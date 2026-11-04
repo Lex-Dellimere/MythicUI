@@ -100,6 +100,8 @@ fn bar_update(ui: MythicUi*, n: MythicNode*, ov: MythicNode*, ax: int32, input: 
   // the hit zone is 12 wide along the edge; the bar takes the pointer only while it shows
   if (ax == 0) { ov->box.width = mythic_grow(); ov->box.height = mythic_fixed(12.0); ov->box.align_y = MYTHIC_ALIGN_END; }
   else { ov->box.width = mythic_fixed(12.0); ov->box.height = mythic_grow(); ov->box.align_x = MYTHIC_ALIGN_END; }
+  // both overlays exist before either is updated: point interact at this one
+  ui->last_node = ov;
   var r: MythicResp = mythic_interact(ui, bid, MYTHIC_SENSE_DRAG | MYTHIC_SENSE_CLICK);
   var mp: MythicVec2 = ui->in.mouse;
   var zone: MythicRect = st->rect;
