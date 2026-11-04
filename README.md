@@ -19,9 +19,9 @@ _Coming soon._
 - **Everything is drawn by MythicUI itself** on the CPU: antialiased shapes, shadows, gradients, vector icons and TrueType text. The fonts are built into the library, so apps work on machines with no fonts installed.
 - **Fast and quiet.** Only the parts of the window that changed get redrawn. A full 1080p repaint takes about 4 to 6 ms, a frame where nothing changed about 0.3 ms, and an idle app uses 0% CPU.
 - **Layout** with rows and columns, padding, gaps, alignment, and fixed, fit, grow and percent sizes. Text can wrap or cut off with an ellipsis.
-- **Widgets:** labels, headings, buttons (primary, secondary, ghost, danger, three sizes, icons), checkboxes, switches, radio buttons, sliders, progress bars, cards and panels, separators and icons.
+- **Widgets:** labels, headings, buttons (primary, secondary, ghost, danger, three sizes, icons), checkboxes, switches, radio buttons, sliders, single-line text inputs (selection, undo, placeholder, error and read-only states), progress bars, cards and panels, separators and icons.
 - **Animated states.** Hover, press, focus and disabled all animate smoothly. There's a reduced motion option.
-- **Keyboard support.** Tab and Shift+Tab move focus, Enter and Space activate, arrow keys work in radio groups and sliders.
+- **Keyboard support.** Tab and Shift+Tab move focus, Enter and Space activate, arrow keys work in radio groups and sliders, and text inputs have the usual editing keys.
 - **HiDPI.** Everything scales with the screen DPI.
 
 ## Getting started
@@ -51,6 +51,13 @@ fn main() -> int32 {
   var app: App;
   return mythic_run({ title: "Hello", width: 480, height: 320 }, &frame, (rawptr)&app);
 }
+```
+
+A text input edits a `MythicTextBuf` that your app owns (a zeroed one is an empty buffer):
+
+```mettle
+if (mythic_text_input_ex(ui, "Name", &app->name, { placeholder: "Ada Lovelace" })) { app->dirty = true; }
+if (mythic_last(ui).submitted) { save(app); }    // Enter was pressed
 ```
 
 Build it:
@@ -83,7 +90,6 @@ MythicUI ships Inter and JetBrains Mono (subset, in `assets/fonts`). Both are un
 
 MythicUI is still being built. These are the next things to land:
 
-- Single-line text input with selection, undo and copy/paste
 - Clipboard on both platforms
 - Scroll views and long lists (only the visible rows get built, so 100k rows is fine)
 - Tabs and tooltips

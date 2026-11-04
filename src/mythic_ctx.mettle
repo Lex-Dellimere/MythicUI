@@ -29,9 +29,15 @@ export struct MythicWState { last_frame: int64; flags: int32; i: int64[2]; f: fl
 // user-owned text buffer; zero value is valid; MythicUI grows it with malloc (§4)
 export struct MythicTextBuf { data: uint8*; len: int64; cap: int64; max_len: int64; }
 
-// the single active text edit (§4); undo ring added in M3
+// one undo snapshot of an edited buffer (malloc'd copy, 0 when empty)
+export struct MythicEditSnap { data: uint8*; len: int64; cursor: int64; anchor: int64; }
+
+// the single active text edit (§4). Undo ring: logical entries [0, undo_count) start at slot
+// undo_first; entries before undo_pos are undo states, the rest redo states.
 export struct MythicEditState { id: uint64; cursor: int64; anchor: int64; scroll_x: float32;
-                              blink_t0: int64; last_input_us: int64; }
+                              blink_t0: int64; last_input_us: int64;
+                              undo: MythicEditSnap[32]; undo_first: int32; undo_count: int32; undo_pos: int32;
+                              run_kind: int32; run_us: int64; drag_mode: int32; word_a: int64; word_b: int64; }
 
 export struct MythicKeyEvent { key: int32; mods: int32; repeat: bool; }
 
@@ -187,6 +193,7 @@ export fn mythic_ctx_destroy(ui: MythicUi*) {
   mythic_vec_free<uint32>(&ui->in.text);
   mythic_map_free<MythicWState>(&ui->states);
   mythic_map_free<MythicTween>(&ui->tweens);
+  mythic_edit_clear(ui);
   free((rawptr)ui);
 }
 
@@ -374,6 +381,8 @@ export fn mythic_ctx_pass_end(ui: MythicUi*) -> bool {
     // input transitions are consumed by the first pass only: clicks never double-fire
     if (ui->in.mouse_pressed[1] && !ui->focus_claimed) { ui->focus_id = 0; }
     if (ui->in.mouse_released[1] || !ui->in.mouse_down[1]) { ui->active_id = 0; }
+    // Escape that no widget consumed clears focus (Amendment 17)
+    if (mythic_key_pressed(ui, MYTHIC_KEY_ESCAPE, -1)) { ui->focus_id = 0; }
     for i: int32 in 0..4 { ui->in.mouse_pressed[i] = false; ui->in.mouse_released[i] = false; }
     mythic_vec_clear<MythicKeyEvent>(&ui->in.keys);
     mythic_vec_clear<uint32>(&ui->in.text);
@@ -657,8 +666,6 @@ fn focus_keys(ui: MythicUi*) {
     var plain: bool = (k.mods & (MYTHIC_MOD_CTRL | MYTHIC_MOD_ALT | MYTHIC_MOD_SUPER)) == 0;
     if (k.key == MYTHIC_KEY_TAB && plain) {
       tab_move(ui, (k.mods & MYTHIC_MOD_SHIFT) != 0);
-    } else if (k.key == MYTHIC_KEY_ESCAPE) {
-      ui->focus_id = 0;
     } else if ((k.key == MYTHIC_KEY_SPACE || k.key == MYTHIC_KEY_ENTER) && plain && ui->focus_id != 0) {
       var e: MythicFocusEnt* = mythic_focus_prev_ent(ui, ui->focus_id);
       if (e != 0) {
@@ -698,6 +705,14 @@ export fn mythic_key_consume(ui: MythicUi*, key: int32, mods: int32) -> bool {
     }
   }
   return false;
+}
+/// Drops the active text edit and frees its undo history.
+export fn mythic_edit_clear(ui: MythicUi*) {
+  for i: int32 in 0..32 {
+    if (ui->edit.undo[i].data != 0) { free((rawptr)ui->edit.undo[i].data); }
+  }
+  var z: MythicEditState;
+  ui->edit = z;
 }
 /// This frame's typed text as UTF-8 (arena copy); consumes it.
 export fn mythic_take_text(ui: MythicUi*) -> string {

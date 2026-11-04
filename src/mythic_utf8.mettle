@@ -65,3 +65,27 @@ export fn mythic_utf8_count(s: uint8*, len: int64) -> int64 {
   while (i < len) { i = mythic_utf8_decode(s, len, i, &cp); n = n + 1; }
   return n;
 }
+
+/// Index of the code point after the one at byte `i` (the next caret stop); `len` at the end.
+export fn mythic_utf8_next(s: uint8*, len: int64, i: int64) -> int64 {
+  if (i >= len) { return len; }
+  var cp: uint32 = 0;
+  return mythic_utf8_decode(s, len, i, &cp);
+}
+
+/// Start of the code point that ends at byte `i` (the previous caret stop); 0 at the start.
+/// Agrees with mythic_utf8_decode on invalid input, where every bad byte is its own code point.
+export fn mythic_utf8_prev(s: uint8*, len: int64, i: int64) -> int64 {
+  if (i <= 0) { return 0; }
+  var e: int64 = i;
+  if (e > len) { e = len; }
+  // the longest sequence that decodes to exactly [j, e) wins; a lead byte never sits inside one
+  var j: int64 = e - 4;
+  if (j < 0) { j = 0; }
+  var cp: uint32 = 0;
+  while (j < e - 1) {
+    if (mythic_utf8_decode(s, len, j, &cp) == e) { return j; }
+    j = j + 1;
+  }
+  return e - 1;
+}
