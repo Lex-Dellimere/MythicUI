@@ -253,7 +253,7 @@ fn scroll_close(ui: MythicUi*, n: MythicNode*) {
     }
   }
   var st: MythicScrollState* = mythic_map_get<MythicScrollState>(&ui->scrolls, run->id, false);
-  if (!inside) { st->into_view = 0; return; }
+  if (!inside) { st->into_view = 0; st->into_wait = 0; return; }
   if (st->into_view == fid) { return; }
   // keyboard focus moved to a child: scroll it into view once (§4); a click does not scroll
   if (!ui->focus_visible) { st->into_view = fid; return; }
@@ -261,6 +261,9 @@ fn scroll_close(ui: MythicUi*, n: MythicNode*) {
     reveal(st, ui->focus_rect);
     st->into_view = fid;
     scroll_step(ui, n);
+    // an outer view closes next: show it where the child will land, not where it was laid out
+    ui->focus_rect.x = ui->focus_rect.x - (st->target.x - st->laid.x);
+    ui->focus_rect.y = ui->focus_rect.y - (st->target.y - st->laid.y);
   } else if (st->into_wait != fid) {
     // its rect is known after this pass's layout
     st->into_wait = fid;
