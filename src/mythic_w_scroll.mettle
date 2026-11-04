@@ -179,6 +179,9 @@ fn scroll_step(ui: MythicUi*, n: MythicNode*) {
   // within half a device pixel nothing visible is left to animate
   if (mythic_absf(st->target.x - o.x) * sc < 0.5) { o.x = st->target.x; }
   if (mythic_absf(st->target.y - o.y) * sc < 0.5) { o.y = st->target.y; }
+  // far down a long list a float32 step can round to nothing: snap rather than animate forever
+  if (o.x == st->base.x) { o.x = st->target.x; }
+  if (o.y == st->base.y) { o.y = st->target.y; }
   if (o.x != st->base.x || o.y != st->base.y) { st->shown_us = ui->time_us; }
   if (o.x != st->target.x || o.y != st->target.y) {
     ui->anim_active = true;
@@ -377,7 +380,8 @@ fn list_close(ui: MythicUi*, n: MythicNode*, run: ScrollRun*) {
 
 /// Rows [*first, *last) of a list of `count` rows of height `row_h` that are in view. Call it
 /// right after mythic_list_begin and declare exactly those rows: the rows above and below become
-/// spacers, so only visible rows are built and the scrollbar still reflects `count`.
+/// spacers, so only visible rows are built and the scrollbar still reflects `count`. Offsets are
+/// float32: rows stay pixel-exact up to about 16M px of content (500k rows of 32).
 export fn mythic_list_visible_range(ui: MythicUi*, row_h: float32, count: int64, first: int64*, last: int64*) {
   var n: MythicNode* = list_run(ui);
   *first = 0;
