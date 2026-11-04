@@ -1,6 +1,6 @@
 // A small tour of what MythicUI can do today: layout, cards, buttons, toggles,
 // sliders, progress, text inputs, the clipboard, scroll views, a 100,000 row list,
-// icons, keyboard focus (press Tab) and light/dark themes.
+// tabs, tooltips, icons, keyboard focus (press Tab) and light/dark themes.
 import "mythic/mythic";
 
 struct App {
@@ -15,6 +15,7 @@ struct App {
   building: bool;
   progress: float32;
   builds: int32;
+  settings_page: int32; // 0 general, 1 notifications, 2 about
   name: MythicTextBuf;
   version: MythicTextBuf;
   output: MythicTextBuf;
@@ -68,6 +69,7 @@ fn header(ui: MythicUi*, app: App*) {
     if (mythic_switch(ui, "Dark mode", &app->dark)) {
       if (app->dark) { mythic_set_theme(ui, mythic_theme_dark()); } else { mythic_set_theme(ui, mythic_theme_light()); }
     }
+    mythic_tooltip(ui, "Switch between the light and dark theme");
   mythic_end(ui);
 }
 
@@ -97,9 +99,12 @@ fn build_card(ui: MythicUi*, app: App*) {
           app->building = true;
           app->progress = 0.0;
         }
+        mythic_tooltip(ui, "Compile the project with the profile above");
       mythic_disabled_end(ui);
       if (mythic_button(ui, "Clean")) { app->builds = 0; app->progress = 0.0; }
+      mythic_tooltip(ui, "Clear the build and its log");
       mythic_button_ex(ui, "Logs", { variant: MYTHIC_BTN_GHOST });
+      mythic_tooltip(ui, "The log is in the Log card below");
     mythic_end(ui);
   mythic_end(ui);
 }
@@ -107,21 +112,27 @@ fn build_card(ui: MythicUi*, app: App*) {
 fn settings_card(ui: MythicUi*, app: App*) {
   mythic_card_begin_ex(ui, { width: mythic_grow(), pad: mythic_pad(20), gap: 14 }, { elevation: 1 });
     mythic_label_ex(ui, "Settings", { role: MYTHIC_TYPE_TITLE });
-    mythic_slider_ex(ui, "CPU budget", &app->threads, { min: 0.0, max: 1.0, step: 0.05, width: mythic_grow() });
-    mythic_switch(ui, "Desktop notifications", &app->notify);
-    mythic_switch(ui, "Save on build", &app->autosave);
-    mythic_separator(ui);
-    mythic_label_ex(ui, "Everything here is drawn by MythicUI itself on the CPU: rounded corners, soft shadows, icons and Geist Serif text, with no toolkit underneath.", { role: MYTHIC_TYPE_BODY, tone: MYTHIC_TONE_SECONDARY, wrap: true, width: mythic_grow() });
-    mythic_row_begin(ui, { gap: 10, align_y: MYTHIC_ALIGN_CENTER });
-      var c: uint32 = mythic_theme(ui)->colors.text_secondary;
-      mythic_icon(ui, MYTHIC_ICON_CHECK, 16.0, c);
-      mythic_icon(ui, MYTHIC_ICON_SEARCH, 16.0, c);
-      mythic_icon(ui, MYTHIC_ICON_INFO, 16.0, c);
-      mythic_icon(ui, MYTHIC_ICON_WARNING, 16.0, c);
-      mythic_icon(ui, MYTHIC_ICON_PLUS, 16.0, c);
-      mythic_icon(ui, MYTHIC_ICON_CLOSE, 16.0, c);
-      mythic_icon(ui, MYTHIC_ICON_MENU, 16.0, c);
-    mythic_end(ui);
+    var pages: string[3] = ["General", "Notifications", "About"];
+    mythic_tabs(ui, "settings", pages, &app->settings_page);
+    if (app->settings_page == 0) {
+      mythic_slider_ex(ui, "CPU budget", &app->threads, { min: 0.0, max: 1.0, step: 0.05, width: mythic_grow() });
+      mythic_switch(ui, "Save on build", &app->autosave);
+    } else if (app->settings_page == 1) {
+      mythic_switch(ui, "Desktop notifications", &app->notify);
+      mythic_label_ex(ui, "Tells you when a build finishes or fails.", { role: MYTHIC_TYPE_BODY, tone: MYTHIC_TONE_SECONDARY });
+    } else {
+      mythic_label_ex(ui, "Everything here is drawn by MythicUI itself on the CPU: rounded corners, soft shadows, icons and Geist Serif text, with no toolkit underneath.", { role: MYTHIC_TYPE_BODY, tone: MYTHIC_TONE_SECONDARY, wrap: true, width: mythic_grow() });
+      mythic_row_begin(ui, { gap: 10, align_y: MYTHIC_ALIGN_CENTER });
+        var c: uint32 = mythic_theme(ui)->colors.text_secondary;
+        mythic_icon(ui, MYTHIC_ICON_CHECK, 16.0, c);
+        mythic_icon(ui, MYTHIC_ICON_SEARCH, 16.0, c);
+        mythic_icon(ui, MYTHIC_ICON_INFO, 16.0, c);
+        mythic_icon(ui, MYTHIC_ICON_WARNING, 16.0, c);
+        mythic_icon(ui, MYTHIC_ICON_PLUS, 16.0, c);
+        mythic_icon(ui, MYTHIC_ICON_CLOSE, 16.0, c);
+        mythic_icon(ui, MYTHIC_ICON_MENU, 16.0, c);
+      mythic_end(ui);
+    }
   mythic_end(ui);
 }
 
@@ -143,6 +154,7 @@ fn project_card(ui: MythicUi*, app: App*) {
         mythic_clipboard_set(ui, mythic_textbuf_str(&app->output));
         app->status = 2;
       }
+      mythic_tooltip(ui, "Copy the output path to the clipboard");
     mythic_end(ui);
     if (app->status == 1) {
       mythic_label_ex(ui, "Saved.", { role: MYTHIC_TYPE_BODY, tone: MYTHIC_TONE_SECONDARY });
