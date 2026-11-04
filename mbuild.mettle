@@ -8,6 +8,7 @@ fn project() {
   mb_meta("license", "Apache-2.0");
   mb_meta("repository", "https://github.com/Lex-Dellimere/MythicUI");
   mb_import_root("src");
+  mb_agents(false);
   mb_bin("showcase", "examples/showcase/showcase.mettle");
   mb_on("linux");
   mb_link_libs("c");          // dlopen: Glint loads libEGL / libGL at run time
