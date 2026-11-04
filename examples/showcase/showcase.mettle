@@ -1,6 +1,6 @@
 // A small tour of what MythicUI can do today: layout, cards, buttons, toggles,
-// sliders, progress, text inputs, the clipboard, icons, keyboard focus (press Tab)
-// and light/dark themes.
+// sliders, progress, text inputs, the clipboard, scroll views, a 100,000 row list,
+// icons, keyboard focus (press Tab) and light/dark themes.
 import "mythic/mythic";
 
 struct App {
@@ -19,6 +19,18 @@ struct App {
   version: MythicTextBuf;
   output: MythicTextBuf;
   status: int32;        // 0 none, 1 saved, 2 copied
+  file: int64;          // selected row in the file list, -1 for none
+  first: int64;         // rows the file list builds this frame
+  last: int64;
+}
+
+const FILE_COUNT: int64 = 100000;
+
+// Log lines so far: 40 per finished build, plus the share of the running one.
+fn log_lines(app: App*) -> int32 {
+  var n: int32 = app->builds * 40;
+  if (app->building) { n = n + (int32)(app->progress * 40.0); }
+  return n;
 }
 
 // "1", "1.2" or "1.2.3": digits separated by single dots.
@@ -142,6 +154,41 @@ fn project_card(ui: MythicUi*, app: App*) {
   mythic_end(ui);
 }
 
+fn files_card(ui: MythicUi*, app: App*) {
+  mythic_card_begin_ex(ui, { width: mythic_grow(), pad: mythic_pad(20), gap: 14 }, { elevation: 1 });
+    mythic_label_ex(ui, "Files", { role: MYTHIC_TYPE_TITLE });
+    mythic_list_begin(ui, "files", { width: mythic_grow(), height: mythic_fixed(260) });
+      mythic_list_visible_range(ui, 32, FILE_COUNT, &app->first, &app->last);
+      for i: int64 in app->first..app->last {
+        mythic_push_id_int(ui, i);
+        if (mythic_list_item(ui, "src/module_{i}.mettle", i == app->file)) { app->file = i; }
+        mythic_pop_id(ui);
+      }
+    mythic_end(ui);
+    if (app->file < 0) {
+      mythic_label_ex(ui, "100,000 rows, and only the ones on screen get built.", { role: MYTHIC_TYPE_BODY, tone: MYTHIC_TONE_SECONDARY });
+    } else {
+      mythic_label_ex(ui, "Selected src/module_{app->file}.mettle", { role: MYTHIC_TYPE_BODY, tone: MYTHIC_TONE_SECONDARY });
+    }
+  mythic_end(ui);
+}
+
+fn log_card(ui: MythicUi*, app: App*) {
+  mythic_card_begin_ex(ui, { width: mythic_grow(), pad: mythic_pad(20), gap: 14 }, { elevation: 1 });
+    mythic_label_ex(ui, "Log", { role: MYTHIC_TYPE_TITLE });
+    mythic_scroll_begin(ui, "log", { width: mythic_grow(), height: mythic_fixed(260), gap: 4 });
+      var n: int32 = log_lines(app);
+      if (n == 0) {
+        mythic_label_ex(ui, "Press Build to fill the log.", { role: MYTHIC_TYPE_BODY, tone: MYTHIC_TONE_SECONDARY });
+      }
+      for i: int32 in 0..n {
+        mythic_label_ex(ui, "compiling src/module_{i}.mettle", { role: MYTHIC_TYPE_MONO });
+      }
+    mythic_end(ui);
+    mythic_label_ex(ui, "{log_lines(app)} lines", { role: MYTHIC_TYPE_BODY, tone: MYTHIC_TONE_SECONDARY });
+  mythic_end(ui);
+}
+
 fn frame(ui: MythicUi*, ud: rawptr) {
   var app: App* = (App*)ud;
   if (app->building) {
@@ -149,13 +196,17 @@ fn frame(ui: MythicUi*, ud: rawptr) {
     if (app->progress >= 1.0) { app->building = false; app->builds = app->builds + 1; }
     mythic_request_frame_in(ui, 16);
   }
-  mythic_column_begin(ui, { width: mythic_grow(), height: mythic_grow(), pad: mythic_pad(32), gap: 24 });
+  mythic_scroll_begin(ui, "page", { width: mythic_grow(), height: mythic_grow(), pad: mythic_pad(32), gap: 24 });
     header(ui, app);
     mythic_row_begin(ui, { width: mythic_grow(), gap: 20 });
       build_card(ui, app);
       settings_card(ui, app);
     mythic_end(ui);
     project_card(ui, app);
+    mythic_row_begin(ui, { width: mythic_grow(), gap: 20 });
+      files_card(ui, app);
+      log_card(ui, app);
+    mythic_end(ui);
   mythic_end(ui);
 }
 
@@ -165,6 +216,7 @@ fn main() -> int32 {
   app.threads = 0.6;
   app.optimize = true;
   app.notify = true;
+  app.file = -1;
   app.name.max_len = 40;
   mythic_textbuf_set(&app.name, "mythic-demo");
   mythic_textbuf_set(&app.version, "0.3.0");
