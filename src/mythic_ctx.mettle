@@ -131,6 +131,8 @@ export struct MythicUi {
   time_us: int64;
   last_time_us: int64;
   dt: float32;                     // seconds
+  renderer: int32;                 // MYTHIC_RENDERER_GL or _CPU, set by the app each frame
+  frame_ms: float32;               // how long the last drawn frame took, set by the app
   next_frame_us: int64;            // 0 = none requested
   quit: bool;
   close_requested: bool;
@@ -642,6 +644,10 @@ export fn mythic_set_title(ui: MythicUi*, title: string) {
 }
 /// Seconds since the previous frame (one nominal frame after idle).
 export fn mythic_dt(ui: MythicUi*) -> float32 { return ui->dt; }
+/// The renderer drawing this window: MYTHIC_RENDERER_GL or MYTHIC_RENDERER_CPU (0 before the first frame).
+export fn mythic_renderer(ui: MythicUi*) -> int32 { return ui->renderer; }
+/// Milliseconds the last frame that drew something took, from input to present.
+export fn mythic_frame_ms(ui: MythicUi*) -> float32 { return ui->frame_ms; }
 export fn mythic_time_us(ui: MythicUi*) -> int64 { return ui->time_us; }
 export fn mythic_scale(ui: MythicUi*) -> float32 { return ui->scale; }
 /// Window size in logical px.

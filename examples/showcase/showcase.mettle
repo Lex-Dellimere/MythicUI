@@ -1,6 +1,7 @@
 // A small tour of what MythicUI can do today: layout, cards, buttons, toggles,
 // sliders, progress, text inputs, the clipboard, scroll views, a 100,000 row list,
-// tabs, tooltips, icons, keyboard focus (press Tab) and light/dark themes.
+// tabs, tooltips, icons, keyboard focus (press Tab) and light/dark themes. The header shows
+// which renderer draws the window (OpenGL, or the CPU fallback) and the last frame's time.
 import "mythic/mythic";
 
 struct App {
@@ -59,6 +60,15 @@ fn update_output(app: App*) {
   mythic_textbuf_set(&app->output, "build/release/{name}");
 }
 
+// "OpenGL · 1.7 ms" or "CPU · 3.3 ms". Set MYTHIC_RENDERER=cpu or gl to pick one.
+fn renderer_badge(ui: MythicUi*) {
+  var name: string = "CPU";
+  if (mythic_renderer(ui) == MYTHIC_RENDERER_GL) { name = "OpenGL"; }
+  var tenths: int32 = mythic_iround(mythic_frame_ms(ui) * 10.0);
+  mythic_label_ex(ui, "{name} · {tenths / 10}.{tenths % 10} ms", { role: MYTHIC_TYPE_CAPTION, tone: MYTHIC_TONE_SECONDARY });
+  mythic_tooltip(ui, "Which renderer draws this window, and how long the last frame took");
+}
+
 fn header(ui: MythicUi*, app: App*) {
   mythic_row_begin(ui, { width: mythic_grow(), align_y: MYTHIC_ALIGN_CENTER, gap: 12 });
     mythic_column_begin(ui, { gap: 2 });
@@ -66,6 +76,7 @@ fn header(ui: MythicUi*, app: App*) {
       mythic_label_ex(ui, "Immediate-mode GUI for Mettle. Press Tab to move around.", { role: MYTHIC_TYPE_BODY, tone: MYTHIC_TONE_SECONDARY });
     mythic_end(ui);
     mythic_spacer(ui);
+    renderer_badge(ui);
     if (mythic_switch(ui, "Dark mode", &app->dark)) {
       if (app->dark) { mythic_set_theme(ui, mythic_theme_dark()); } else { mythic_set_theme(ui, mythic_theme_light()); }
     }

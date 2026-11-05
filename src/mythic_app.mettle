@@ -172,6 +172,7 @@ fn run_frame(app: MythicApp*, mythic_frame_cb: fn(MythicUi*, rawptr) -> void, ud
   var plat: MythicPlatform* = app->plat;
   mythic_ctx_frame_begin(ui, now);
   mythic_fonts_frame_begin(app->fonts, ui->frame);
+  if (app->gl != 0) { ui->renderer = MYTHIC_RENDERER_GL; } else { ui->renderer = MYTHIC_RENDERER_CPU; }
   while (true) {
     mythic_ctx_pass_begin(ui);
     if (mythic_frame_cb != 0) { mythic_frame_cb(ui, ud); }
@@ -225,11 +226,10 @@ fn run_frame(app: MythicApp*, mythic_frame_cb: fn(MythicUi*, rawptr) -> void, ud
     app->cursor_sent = ui->cursor;
   }
   app->frames = app->frames + 1;
-  if (ui->trace) {
-    var us: int64 = plat->now_us(plat->self) - now;
-    var ms: float32 = (float32)us / 1000.0;
-    println("trace: frame {app->frames} dirty={n} ms={ms}");
-  }
+  var us: int64 = plat->now_us(plat->self) - now;
+  var ms: float32 = (float32)us / 1000.0;
+  if (n > 0) { ui->frame_ms = ms; }
+  if (ui->trace) { println("trace: frame {app->frames} dirty={n} ms={ms}"); }
 }
 
 // feeds queued events; returns true when a frame is needed
