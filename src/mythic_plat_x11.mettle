@@ -10,7 +10,7 @@ const X_RBUF = 65536;
 const X_RQCAP = 1024;            // parked raw event packets (32 bytes each)
 const X_EQCAP = 4096;            // translated MythicEvents
 const X_STRIP_BYTES = 262144;    // PutImage strip request size
-const X_EVENT_MASK = 6455423;    // key, button, enter/leave, motion, exposure, structure, focus, property
+const X_EVENT_MASK = 6520959;    // key, button, enter/leave, motion, exposure, visibility, structure, focus, property
 const X_SEL_TIMEOUT_MS = 500;    // paste: wait for SelectionNotify
 const X_INCR_TIMEOUT_MS = 1000;  // paste: wait for each INCR chunk
 
@@ -46,6 +46,9 @@ export struct MythicX11 {
   last_time: int64;                 // server time of the newest input event
   gl_visual: int64; gl_depth: int64;  // window visual for GL (mythic_plat_gl_prepare); 0 = root visual
   connected: int32;                 // 0 not tried, 1 connected (mythic_plat_gl_connect or open), -1 failed
+  mapped: bool;                     // MapNotify / UnmapNotify (a WM unmaps on workspace switch, iconify)
+  obscured: bool;                   // VisibilityNotify FullyObscured (no compositor: nothing of it shows)
+  gl_active: bool;                  // a GL context draws the window: Expose must not put the CPU framebuffer
 }
 
 // ---------- byte packing (little-endian; we send 'l') ----------
@@ -716,12 +719,19 @@ fn translate(x: MythicX11*, e: uint8*) {
     }
     case 12: {
       if (rd16(e, 16) == 0) {
-        if (x->fb_valid && x->fb_w == x->win_w && x->fb_h == x->win_h) { present_rects(x, (MythicRectI*)0, 0); }
+        if (!x->gl_active && x->fb_valid && x->fb_w == x->win_w && x->fb_h == x->win_h) { present_rects(x, (MythicRectI*)0, 0); }
         var ev: MythicEvent;
         ev.kind = MYTHIC_EV_EXPOSE;
         push_ev(x, ev);
       }
     }
+    case 15: {
+      // VisibilityNotify: 0 Unobscured, 1 PartiallyObscured, 2 FullyObscured (a compositor
+      // redirects windows and they stay Unobscured, so this only throttles where nothing shows)
+      if (rd32(e, 4) == x->win) { x->obscured = rd8(e, 8) == 2; }
+    }
+    case 18: { if (rd32(e, 8) == x->win) { x->mapped = false; } }
+    case 19: { if (rd32(e, 8) == x->win) { x->mapped = true; } }
     case 22: {
       if (rd32(e, 4) == x->win) {
         var nw: int32 = (int32)rd16(e, 20);
@@ -1052,6 +1062,8 @@ fn x11_open(self: rawptr, desc: MythicWindowDesc*) -> int32 {
   var mp: uint8[8];
   wr8(&mp[0], 0, 8); wr8(&mp[0], 1, 0); wr16(&mp[0], 2, 2); wr32(&mp[0], 4, x->win);
   send_req(x, &mp[0], 8);                               // MapWindow
+  x->mapped = true;                                     // until an UnmapNotify says otherwise
+  x->obscured = false;
   load_keymap(x);
 
   var no_shm: MythicBytes;
@@ -1531,6 +1543,32 @@ export fn mythic_plat_gl_handle(p: MythicPlatform*) -> int64 {
   var x: MythicX11* = (MythicX11*)p->self;
   if (!x->opened) { return 0; }
   return x->win;
+}
+
+/// True while nothing of the window can show: unmapped (iconified, another workspace) or fully
+/// covered with no compositor. mythic_app skips drawing and slows timer frames then. False when
+/// `p` is not this platform.
+export fn mythic_plat_hidden(p: MythicPlatform*) -> bool {
+  if (p == 0 || p->open != &x11_open) { return false; }
+  var x: MythicX11* = (MythicX11*)p->self;
+  return x->opened && (!x->mapped || x->obscured);
+}
+
+/// GL (mythic_app): a GL context now draws the window (on), or the CPU renderer again (off).
+/// While on, Expose leaves the window to GL instead of putting the CPU framebuffer, which holds
+/// a frame from before GL started, and that framebuffer is freed.
+export fn mythic_plat_gl_active(p: MythicPlatform*, on: bool) {
+  if (p == 0 || p->open != &x11_open) { return; }
+  var x: MythicX11* = (MythicX11*)p->self;
+  x->gl_active = on;
+  if (!on || x->px == 0) { return; }
+  if (x->shm_pending && !x->dead) { wait_shm_completion(x); }
+  if (x->shm_ok) { if (!x->dead) { shm_release(x); } }
+  else { free(x->px); }
+  x->px = (uint32*)0;
+  x->fb_w = 0;
+  x->fb_h = 0;
+  x->fb_valid = false;
 }
 
 /// The process environment, whatever the platform object (malloc'd, nul-terminated value).

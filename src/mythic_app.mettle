@@ -46,7 +46,14 @@ export struct MythicApp {
   gl_asked: bool;              // GL was asked for explicitly (say why on stderr if it goes)
   gl_due: bool;                // native window: open the GL context once the first CPU frame is up
   gl_cfg: GlintConfig;
+  hidden: bool;                // nothing of the window shows (mythic_plat_hidden): frames skip drawing
+  hidden_skipped: bool;        // a frame was not drawn while hidden: the next shown frame is drawn in full
 }
+
+// While the window is hidden (unmapped, or fully covered with no compositor) timer frames come at
+// most this often and draw nothing; input still runs a frame at once. An app that redraws every
+// 16 ms then costs neither the X server nor the GPU anything until it shows again.
+const MYTHIC_HIDDEN_FRAME_MS: int32 = 100;
 
 // GL draws this frame (made, and its shaders are built)
 fn gl_on(app: MythicApp*) -> bool { return app->gl != 0 && app->gl_ready; }
@@ -135,6 +142,7 @@ fn renderer_line(app: MythicApp*, why: cstring, asked: bool) {
 }
 
 fn gl_drop(app: MythicApp*) {
+  if (app->gl_ready && !app->headless) { mythic_plat_gl_active(app->plat, false); }
   mythic_gl_destroy(app->gl);
   glint_close(app->glctx);
   app->gl = (MythicGLRenderer*)0;
@@ -182,6 +190,7 @@ fn gl_poll(app: MythicApp*) -> bool {
     }
     app->gl_ready = true;
     app->force_full = true;                 // the back buffer holds nothing yet: draw it all
+    if (!app->headless) { mythic_plat_gl_active(app->plat, true); }   // Expose: the CPU frame is stale now
     mythic_renderer_destroy(app->renderer);
     app->renderer = (MythicRenderer*)0;
     if (app->ui->trace) { println("trace: gl program ready after {app->frames} cpu frames (warm-up {warm_ms} ms)"); }
@@ -289,7 +298,9 @@ fn run_frame(app: MythicApp*, mythic_frame_cb: fn(MythicUi*, rawptr) -> void, ud
   var painter: MythicPainter = { dl: &app->dl, fonts: app->fonts, scale: ui->scale, opacity: 1.0, arena: ui->arena };
   mythic_lay_paint(ui, &painter);
   var n: int32 = 0;
-  if (gl_on(app)) {
+  var skip: bool = app->hidden;               // nothing shows: draw nothing, draw it all once it does
+  app->hidden_skipped = skip;
+  if (gl_on(app) && !skip) {
     n = mythic_gl_render(app->gl, &app->dl, fb.w, fb.h, app->force_full);
     if (n < 0) {
       gl_fail(app);
@@ -305,12 +316,12 @@ fn run_frame(app: MythicApp*, mythic_frame_cb: fn(MythicUi*, rawptr) -> void, ud
       }
     }
   }
-  if (!gl_on(app) && fb.px != 0) {
+  if (!gl_on(app) && fb.px != 0 && !skip) {
     n = mythic_renderer_render(app->renderer, &app->dl, fb, app->force_full);
     if (app->force_full) { plat->present(plat->self, (MythicRectI*)0, 0); }
     else if (n > 0) { plat->present(plat->self, mythic_renderer_dirty(app->renderer), n); }
   }
-  app->force_full = false;
+  app->force_full = skip;
   app->first = false;
   app->last_dirty = n;
   if (ui->cursor != app->cursor_sent) {
@@ -321,7 +332,10 @@ fn run_frame(app: MythicApp*, mythic_frame_cb: fn(MythicUi*, rawptr) -> void, ud
   var us: int64 = plat->now_us(plat->self) - now;
   var ms: float32 = (float32)us / 1000.0;
   if (n > 0) { ui->frame_ms = ms; }
-  if (ui->trace) { println("trace: frame {app->frames} dirty={n} ms={ms}"); }
+  if (ui->trace) {
+    if (skip) { println("trace: frame {app->frames} dirty=0 ms={ms} hidden"); }
+    else { println("trace: frame {app->frames} dirty={n} ms={ms}"); }
+  }
 }
 
 // feeds queued events; returns true when a frame is needed
@@ -344,6 +358,10 @@ fn pump(app: MythicApp*) -> bool {
   }
   var now: int64 = plat->now_us(plat->self);
   if (ui->next_frame_us > 0 && now >= ui->next_frame_us) { need = true; }
+  if (expose && app->hidden_skipped) { need = true; }   // the last frames were not drawn: draw one now
+  // GL presents only the damage: a frame due anyway draws it all (the CPU path re-puts its framebuffer
+  // on Expose in the platform, and after hidden frames force_full is still set)
+  if (expose && need && gl_on(app)) { app->force_full = true; }
   if (!need && expose) {
     if (!gl_on(app) || app->headless) { plat->present(plat->self, (MythicRectI*)0, 0); }
     else if (mythic_gl_render(app->gl, &app->dl, app->fb_w, app->fb_h, true) < 0) { gl_fail(app); need = true; }
@@ -420,8 +438,14 @@ export fn mythic_app_step(app: MythicApp*, mythic_frame_cb: fn(MythicUi*, rawptr
     if (dt <= 0) { timeout = 0; } else { timeout = (int32)((dt + 999) / 1000); }
   }
   if (gl_pending(app) && (timeout < 0 || timeout > 4)) { timeout = 4; }   // shaders compiling: look again soon
+  // hidden: timer frames slow down (input, a held button or the first frame still go at once)
+  if (app->hidden && timeout >= 0 && timeout < MYTHIC_HIDDEN_FRAME_MS && !app->has_held && !app->first) {
+    timeout = MYTHIC_HIDDEN_FRAME_MS;
+  }
   plat->wait(plat->self, timeout);
+  app->hidden = !app->headless && mythic_plat_hidden(plat);
   var switched: bool = gl_poll(app);
+  if (app->hidden_skipped && !app->hidden) { switched = true; app->force_full = true; }   // shown again
   if (pump(app) || switched) { run_frame(app, mythic_frame_cb, ud, plat->now_us(plat->self)); }
   return app->running;
 }

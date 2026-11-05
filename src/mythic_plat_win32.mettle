@@ -25,6 +25,7 @@ extern fn mythic_w32_QueryPerformanceCounter(out: int64*) -> int32 = "QueryPerfo
 extern fn mythic_w32_QueryPerformanceFrequency(out: int64*) -> int32 = "QueryPerformanceFrequency";
 extern fn mythic_w32_LoadLibraryA(name: cstring) -> int64 = "LoadLibraryA";
 extern fn mythic_w32_GetProcAddress(module: int64, name: cstring) -> int64 = "GetProcAddress";
+extern fn mythic_w32_IsIconic(hwnd: int64) -> int32 = "IsIconic";
 extern fn mythic_w32_GetEnvironmentVariableA(name: cstring, buf: uint8*, size: uint32) -> uint32 = "GetEnvironmentVariableA";
 extern fn mythic_w32_RegisterClassExW(wc: W32WndClassExW*) -> uint16 = "RegisterClassExW";
 extern fn mythic_w32_CreateWindowExW(ex_style: uint32, class_name: uint16*, title: uint16*, style: uint32, x: int32, y: int32, w: int32, h: int32, parent: int64, menu: int64, instance: int64, param: int64) -> int64 = "CreateWindowExW";
@@ -94,6 +95,7 @@ export struct MythicW32 {
   scale_forced: bool;
   min_lw: int32; min_lh: int32;      // logical min size, re-scaled on WM_DPICHANGED
   gl: bool;                          // a GL context will own the window (mythic_plat_gl_prepare)
+  gl_active: bool;                   // a GL context draws it now: WM_PAINT must not put the CPU DIB
 }
 
 var g_mythic_w32: MythicW32* = 0;
@@ -287,7 +289,7 @@ fn w32_wnd_proc(hwnd: int64, msg: uint32, wparam: int64, lparam: int64) -> int64
         var rf: fn(rawptr) -> void = w->plat.refresh;
         rf(w->plat.refresh_ud);
       }
-      if (w->fb_valid && w->fb_w == w->win_w && w->fb_h == w->win_h) { present_rects(w, hdc, (MythicRectI*)0, 0); }
+      if (!w->gl_active && w->fb_valid && w->fb_w == w->win_w && w->fb_h == w->win_h) { present_rects(w, hdc, (MythicRectI*)0, 0); }
       mythic_w32_EndPaint(hwnd, &ps);
       var ev: MythicEvent;
       ev.kind = MYTHIC_EV_EXPOSE;
@@ -793,6 +795,24 @@ export fn mythic_plat_gl_handle(p: MythicPlatform*) -> int64 {
   var w: MythicW32* = (MythicW32*)p->self;
   if (!w->opened) { return 0; }
   return w->hwnd;
+}
+
+/// True while the window is minimized (mythic_app skips drawing and slows timer frames then).
+/// False when `p` is not this platform.
+export fn mythic_plat_hidden(p: MythicPlatform*) -> bool {
+  if (p == 0 || p->open != &w32_open) { return false; }
+  var w: MythicW32* = (MythicW32*)p->self;
+  return w->opened && mythic_w32_IsIconic(w->hwnd) != 0;
+}
+
+/// GL (mythic_app): a GL context now draws the window (on), or the CPU renderer again (off).
+/// While on, WM_PAINT leaves the window to GL instead of putting the CPU framebuffer, which
+/// holds a frame from before GL started.
+export fn mythic_plat_gl_active(p: MythicPlatform*, on: bool) {
+  if (p == 0 || p->open != &w32_open) { return; }
+  var w: MythicW32* = (MythicW32*)p->self;
+  w->gl_active = on;
+  if (on) { w->fb_valid = false; }
 }
 
 /// The process environment, whatever the platform object (malloc'd, nul-terminated value).
