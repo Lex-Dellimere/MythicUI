@@ -85,6 +85,10 @@ fn acc_piece(a: MythicAccum*, x0: float32, y0: float32, x1: float32, y1: float32
     var bot: float32 = fy + 1.0; if (by < bot) { bot = by; }
     var dy: float32 = bot - top;
     var xnext: float32 = x + dxdy * dy;
+    // both ends were clamped to [0, w]; stepping can still round to about -1e-7, which would
+    // index acc[-1] (issue 21), so clamp the stepped values too
+    if (x < 0.0) { x = 0.0; } if (x > maxx) { x = maxx; }
+    if (xnext < 0.0) { xnext = 0.0; } if (xnext > maxx) { xnext = maxx; }
     var d: float32 = dy * dir;
     var xa: float32 = x; var xb: float32 = xnext;
     if (xa > xb) { xa = xnext; xb = x; }
