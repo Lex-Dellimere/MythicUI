@@ -45,6 +45,7 @@ export struct MythicX11 {
   clip: uint8*; clip_len: int64; own_clip: bool; own_primary: bool; own_time: int64;
   last_time: int64;                 // server time of the newest input event
   gl_visual: int64; gl_depth: int64;  // window visual for GL (mythic_plat_gl_prepare); 0 = root visual
+  connected: int32;                 // 0 not tried, 1 connected (mythic_plat_gl_connect or open), -1 failed
 }
 
 // ---------- byte packing (little-endian; we send 'l') ----------
@@ -928,8 +929,10 @@ fn set_title_props(x: MythicX11*, s: uint8*, n: int64) {
   free(l1);
 }
 
-fn x11_open(self: rawptr, desc: MythicWindowDesc*) -> int32 {
-  var x: MythicX11* = (MythicX11*)self;
+// buffers and the server connection, once (open, or mythic_plat_gl_connect before it)
+fn x11_connect_once(x: MythicX11*) -> bool {
+  if (x->connected != 0) { return x->connected > 0; }
+  x->connected = -1;
   x->fd = -1;
   x->quiet_seq = -1;
   x->rbuf = (uint8*)malloc(X_RBUF);
@@ -940,9 +943,16 @@ fn x11_open(self: rawptr, desc: MythicWindowDesc*) -> int32 {
   if (!x_connect(x)) {
     if (x->fd >= 0) { syscall(3, (int64)x->fd); }
     x->fd = -1;
-    return 1;
+    return false;
   }
   x->id_next = 1;
+  x->connected = 1;
+  return true;
+}
+
+fn x11_open(self: rawptr, desc: MythicWindowDesc*) -> int32 {
+  var x: MythicX11* = (MythicX11*)self;
+  if (!x11_connect_once(x)) { return 1; }
   // scale: MYTHIC_SCALE overrides Xft.dpi / 96; default 1.0
   var scale: float32 = 1.0;
   var dpi: float32 = read_xft_dpi(x);
@@ -1085,6 +1095,7 @@ fn x11_close(self: rawptr) {
   x->own_primary = false;
   if (x->fd >= 0) { syscall(3, (int64)x->fd); }
   x->fd = -1;
+  x->connected = 0;
 }
 
 fn x11_wait(self: rawptr, timeout_ms: int32) {
@@ -1484,6 +1495,14 @@ export fn mythic_plat_native_create() -> MythicPlatform* {
   p->clipboard_get = &x11_clipboard_get;
   p->getenv = &x11_getenv;
   return p;
+}
+
+/// GL (mythic_app): connect to the X server before Glint's visual probe. Glint's probe is a second
+/// connection; if it were the server's only client, closing it would reset the server (Xvfb, a bare
+/// xinit) and drop our connection while it is being set up. False when `p` is not this platform.
+export fn mythic_plat_gl_connect(p: MythicPlatform*) -> bool {
+  if (p == 0 || p->open != &x11_open) { return false; }
+  return x11_connect_once((MythicX11*)p->self);
 }
 
 /// GL (mythic_app): open the window with this visual and depth (from glint_x11_visual) instead

@@ -611,7 +611,8 @@ fn hist_push(g: MythicGLRenderer*, r: MythicRectI) {
 
 /// Draws the parts of `dl` that changed into the context's w x h drawable and shows them
 /// (swap with damage; nothing for a headless context, see mythic_gl_read). Returns the number of
-/// dirty rects (mythic_gl_dirty; 0 = nothing changed, nothing drawn), or -1 if GL reported an error.
+/// dirty rects (mythic_gl_dirty; 0 = nothing changed, nothing drawn), or -1 if GL reported an error
+/// (nothing shown; the caller drops GL).
 export fn mythic_gl_render(g: MythicGLRenderer*, dl: MythicDrawList*, w: int32, h: int32, force_full: bool) -> int32 {
   use_ctx(g);
   var force: bool = force_full;
@@ -689,9 +690,10 @@ export fn mythic_gl_render(g: MythicGLRenderer*, dl: MythicDrawList*, w: int32, 
   }
   glDisable(GL_SCISSOR_TEST);
   var err: bool = false;
-  while (glGetError() != GL_NO_ERROR) { err = true; }
+  var tries: int32 = 0;
+  while (tries < 16 && glGetError() != GL_NO_ERROR) { err = true; tries = tries + 1; }   // bounded: a lost context may not clear
   g->frames = g->frames + 1;
-  if (err && g->frames == 1) { return -1; }
+  if (err) { return -1; }        // any frame: a lost context shows up as errors
   if (!g->readback) { glint_swap_damage(g->ctx, (int32*)rects, n); }
   return n;
 }

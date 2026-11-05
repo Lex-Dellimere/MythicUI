@@ -775,6 +775,9 @@ export fn mythic_plat_native_create() -> MythicPlatform* {
   return p;
 }
 
+/// GL (mythic_app): nothing to do before open on Win32 (X11 connects early here).
+export fn mythic_plat_gl_connect(p: MythicPlatform*) -> bool { return p != 0 && p->open == &w32_open; }
+
 /// GL (mythic_app): give the window class CS_OWNDC. Call before open. False when `p` is not
 /// this platform. The visual arguments are for X11 and ignored here.
 export fn mythic_plat_gl_prepare(p: MythicPlatform*, visual: int64, depth: int32) -> bool {

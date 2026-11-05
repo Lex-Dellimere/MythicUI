@@ -123,6 +123,7 @@ fn app_create_on(desc: MythicAppDesc, plat: MythicPlatform*, headless: bool, sca
   if (want_gl && !headless) {
     var vid: int64 = 0;
     var depth: int32 = 0;
+    mythic_plat_gl_connect(plat);               // X11: be a client of the server before Glint's probe
     glint_x11_visual(&cfg, &vid, &depth);       // Linux only; Windows needs no visual
     if (!mythic_plat_gl_prepare(plat, vid, depth)) {
       want_gl = false;
@@ -198,9 +199,7 @@ fn run_frame(app: MythicApp*, mythic_frame_cb: fn(MythicUi*, rawptr) -> void, ud
   if (app->gl != 0) {
     n = mythic_gl_render(app->gl, &app->dl, fb.w, fb.h, app->force_full);
     if (n < 0) {
-      renderer_line_drop(app);
-      gl_drop(app);
-      app->renderer = mythic_renderer_create(app->fonts, app->images);
+      gl_fail(app);
       fb = plat->framebuffer(plat->self);
       n = 0;
     } else if (n > 0 && app->headless) {
@@ -254,15 +253,18 @@ fn pump(app: MythicApp*) -> bool {
   var now: int64 = plat->now_us(plat->self);
   if (ui->next_frame_us > 0 && now >= ui->next_frame_us) { need = true; }
   if (!need && expose) {
-    if (app->gl != 0 && !app->headless) { mythic_gl_render(app->gl, &app->dl, app->fb_w, app->fb_h, true); }
-    else { plat->present(plat->self, (MythicRectI*)0, 0); }
+    if (app->gl == 0 || app->headless) { plat->present(plat->self, (MythicRectI*)0, 0); }
+    else if (mythic_gl_render(app->gl, &app->dl, app->fb_w, app->fb_h, true) < 0) { gl_fail(app); need = true; }
   }
   return need;
 }
 
-fn renderer_line_drop(app: MythicApp*) {
-  print_err("MythicUI: the first OpenGL frame failed, using the CPU renderer\n");
-  if (app->ui->trace) { println("trace: renderer cpu (the first GL frame failed)"); }
+// a GL frame failed (first frame, or a lost context later): go on with the CPU renderer
+fn gl_fail(app: MythicApp*) {
+  print_err("MythicUI: an OpenGL frame failed, using the CPU renderer\n");
+  if (app->ui->trace) { println("trace: renderer cpu (a GL frame failed)"); }
+  gl_drop(app);
+  app->renderer = mythic_renderer_create(app->fonts, app->images);
 }
 
 fn app_refresh(p: rawptr) {
