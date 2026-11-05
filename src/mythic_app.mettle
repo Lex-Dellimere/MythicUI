@@ -42,6 +42,47 @@ export struct MythicApp {
   last_dirty: int32;
   exit_code: int32;
   gl: MythicGLRenderer*; glctx: GlintContext*;   // 0 = CPU renderer
+  gl_ready: bool;              // the GL program has linked: GL draws (until then the CPU renderer does)
+  gl_asked: bool;              // GL was asked for explicitly (say why on stderr if it goes)
+  gl_due: bool;                // native window: open the GL context once the first CPU frame is up
+  gl_cfg: GlintConfig;
+}
+
+// GL draws this frame (made, and its shaders are built)
+fn gl_on(app: MythicApp*) -> bool { return app->gl != 0 && app->gl_ready; }
+
+// GL is on its way: the CPU renderer draws until it is ready
+fn gl_pending(app: MythicApp*) -> bool { return app->gl_due || (app->gl != 0 && !app->gl_ready); }
+
+// MYTHIC_GL_TEST=wait=N,lost=N,fail: test hook for the GL handoff and fallback, read once
+fn env_int(b: MythicBytes, key: string) -> int32 {
+  var k: int64 = (int64)key.length;
+  var i: int64 = 0;
+  while (i + k <= b.len) {
+    var hit: bool = true;
+    if (i > 0) { hit = b.data[i - 1] == (uint8)44; }               // ','
+    if (hit) { for j: int64 in 0..k { if (b.data[i + j] != (uint8)key[j]) { hit = false; } } }
+    if (hit) {
+      var v: int32 = 0;
+      var p: int64 = i + k;
+      if (p < b.len && b.data[p] == (uint8)61) {                    // '='
+        p = p + 1;
+        while (p < b.len && b.data[p] >= (uint8)48 && b.data[p] <= (uint8)57) { v = v * 10 + (int32)(b.data[p] - (uint8)48); p = p + 1; }
+        return v;
+      }
+      return 1;
+    }
+    i = i + 1;
+  }
+  return 0;
+}
+
+fn gl_test_env(app: MythicApp*) {
+  var name: string = "MYTHIC_GL_TEST";
+  var b: MythicBytes;
+  if (!mythic_plat_env((uint8*)name.chars, (int64)name.length, &b)) { return; }
+  mythic_gl_test_hook(app->gl, env_int(b, "wait"), env_int(b, "lost"), env_int(b, "fail") != 0);
+  free((rawptr)b.data);
 }
 
 fn env_is_1(p: MythicPlatform*, name: string) -> bool {
@@ -79,6 +120,7 @@ fn renderer_line(app: MythicApp*, why: cstring, asked: bool) {
     trace_cstr(glGetString(GL_RENDERER));
     print(", ");
     trace_cstr(glGetString(GL_VERSION));
+    if (app->glctx->robust_ctx) { print(", robust"); }
     println(")");
     return;
   }
@@ -97,7 +139,58 @@ fn gl_drop(app: MythicApp*) {
   glint_close(app->glctx);
   app->gl = (MythicGLRenderer*)0;
   app->glctx = (GlintContext*)0;
+  app->gl_ready = false;
   app->force_full = true;
+}
+
+// opens the context and starts the shader build (headless: at creation; a window: after its
+// first frame, so the ~100 ms of driver start-up is not spent on a blank window)
+fn gl_open(app: MythicApp*) {
+  var why: cstring = "";
+  var ui: MythicUi* = app->ui;
+  if (app->headless) { app->glctx = glint_open_headless(ui->dev_w, ui->dev_h, &app->gl_cfg); }
+  else { app->glctx = glint_open_existing(mythic_plat_gl_handle(app->plat), &app->gl_cfg); }
+  if (app->glctx == 0) { why = glint_error(); }
+  else {
+    app->gl = mythic_gl_create_async(app->glctx, app->fonts, app->images, app->headless);
+    if (app->gl == 0) { why = mythic_gl_error(); glint_close(app->glctx); app->glctx = (GlintContext*)0; }
+    else { gl_test_env(app); }
+  }
+  renderer_line(app, why, app->gl_asked);
+  if (app->gl != 0 && ui->trace) { println("trace: gl program compiling"); }
+}
+
+// while GL starts the CPU renderer draws; true when that just ended (a full frame is due)
+fn gl_poll(app: MythicApp*) -> bool {
+  if (app->gl_due) {
+    if (app->frames == 0) { return false; }
+    app->gl_due = false;
+    gl_open(app);
+  }
+  if (app->gl == 0 || app->gl_ready) { return false; }
+  var st: int32 = mythic_gl_poll(app->gl, app->headless);     // headless: no window to keep alive, wait
+  if (st == 0) { return false; }
+  if (st > 0) {
+    var warm_ms: float32 = 0.0;
+    if (!app->headless) {
+      // the driver compiles its code on the first draw (llvmpipe: ~150 ms cold): put a CPU frame
+      // on screen first, then draw one GL frame unseen, then switch
+      if (app->frames == 0) { return false; }
+      var t0: int64 = app->plat->now_us(app->plat->self);
+      if (!mythic_gl_warm(app->gl, &app->dl, app->fb_w, app->fb_h)) { gl_fail(app); return true; }
+      warm_ms = (float32)(app->plat->now_us(app->plat->self) - t0) / 1000.0;
+    }
+    app->gl_ready = true;
+    app->force_full = true;                 // the back buffer holds nothing yet: draw it all
+    mythic_renderer_destroy(app->renderer);
+    app->renderer = (MythicRenderer*)0;
+    if (app->ui->trace) { println("trace: gl program ready after {app->frames} cpu frames (warm-up {warm_ms} ms)"); }
+    return true;
+  }
+  var why: cstring = mythic_gl_error();
+  gl_drop(app);
+  renderer_line(app, why, app->gl_asked);
+  return true;
 }
 
 fn app_create_on(desc: MythicAppDesc, plat: MythicPlatform*, headless: bool, scale: float32) -> MythicApp* {
@@ -146,17 +239,16 @@ fn app_create_on(desc: MythicAppDesc, plat: MythicPlatform*, headless: bool, sca
   ui->reduced_motion = desc.reduced_motion || env_is_1(plat, "MYTHIC_REDUCED_MOTION");
   ui->trace = env_is_1(plat, "MYTHIC_TRACE");
   ui->debug = env_is_1(plat, "MYTHIC_DEBUG");
-  if (want_gl) {
-    if (headless) { app->glctx = glint_open_headless(ui->dev_w, ui->dev_h, &cfg); }
-    else { app->glctx = glint_open_existing(mythic_plat_gl_handle(plat), &cfg); }
-    if (app->glctx == 0) { why = glint_error(); }
-    else {
-      app->gl = mythic_gl_create(app->glctx, app->fonts, app->images, headless);
-      if (app->gl == 0) { why = mythic_gl_error(); glint_close(app->glctx); app->glctx = (GlintContext*)0; }
-    }
+  // the CPU renderer also draws while GL starts (issue 18)
+  app->renderer = mythic_renderer_create(app->fonts, app->images);
+  app->gl_asked = asked;
+  app->gl_cfg = cfg;
+  if (want_gl && headless) { gl_open(app); }
+  else if (want_gl) {
+    app->gl_due = true;
+    if (ui->trace) { println("trace: renderer cpu until gl starts"); }
   }
-  if (app->gl == 0) { app->renderer = mythic_renderer_create(app->fonts, app->images); }
-  if (want_gl || ui->trace) { renderer_line(app, why, asked); }
+  else if (asked || ui->trace) { renderer_line(app, why, asked); }
   app->running = true;
   app->first = true;
   app->force_full = true;
@@ -172,7 +264,7 @@ fn run_frame(app: MythicApp*, mythic_frame_cb: fn(MythicUi*, rawptr) -> void, ud
   var plat: MythicPlatform* = app->plat;
   mythic_ctx_frame_begin(ui, now);
   mythic_fonts_frame_begin(app->fonts, ui->frame);
-  if (app->gl != 0) { ui->renderer = MYTHIC_RENDERER_GL; } else { ui->renderer = MYTHIC_RENDERER_CPU; }
+  if (gl_on(app)) { ui->renderer = MYTHIC_RENDERER_GL; } else { ui->renderer = MYTHIC_RENDERER_CPU; }
   while (true) {
     mythic_ctx_pass_begin(ui);
     if (mythic_frame_cb != 0) { mythic_frame_cb(ui, ud); }
@@ -186,7 +278,7 @@ fn run_frame(app: MythicApp*, mythic_frame_cb: fn(MythicUi*, rawptr) -> void, ud
 
   // a GL window draws straight to its surface; CPU and headless GL go through the framebuffer
   var fb: MythicFramebuffer;
-  if (app->gl != 0 && !app->headless) {
+  if (gl_on(app) && !app->headless) {
     fb.w = mythic_maxi(ui->dev_w, 1); fb.h = mythic_maxi(ui->dev_h, 1);
   } else {
     fb = plat->framebuffer(plat->self);
@@ -197,7 +289,7 @@ fn run_frame(app: MythicApp*, mythic_frame_cb: fn(MythicUi*, rawptr) -> void, ud
   var painter: MythicPainter = { dl: &app->dl, fonts: app->fonts, scale: ui->scale, opacity: 1.0, arena: ui->arena };
   mythic_lay_paint(ui, &painter);
   var n: int32 = 0;
-  if (app->gl != 0) {
+  if (gl_on(app)) {
     n = mythic_gl_render(app->gl, &app->dl, fb.w, fb.h, app->force_full);
     if (n < 0) {
       gl_fail(app);
@@ -213,7 +305,7 @@ fn run_frame(app: MythicApp*, mythic_frame_cb: fn(MythicUi*, rawptr) -> void, ud
       }
     }
   }
-  if (app->gl == 0 && fb.px != 0) {
+  if (!gl_on(app) && fb.px != 0) {
     n = mythic_renderer_render(app->renderer, &app->dl, fb, app->force_full);
     if (app->force_full) { plat->present(plat->self, (MythicRectI*)0, 0); }
     else if (n > 0) { plat->present(plat->self, mythic_renderer_dirty(app->renderer), n); }
@@ -253,23 +345,30 @@ fn pump(app: MythicApp*) -> bool {
   var now: int64 = plat->now_us(plat->self);
   if (ui->next_frame_us > 0 && now >= ui->next_frame_us) { need = true; }
   if (!need && expose) {
-    if (app->gl == 0 || app->headless) { plat->present(plat->self, (MythicRectI*)0, 0); }
+    if (!gl_on(app) || app->headless) { plat->present(plat->self, (MythicRectI*)0, 0); }
     else if (mythic_gl_render(app->gl, &app->dl, app->fb_w, app->fb_h, true) < 0) { gl_fail(app); need = true; }
   }
   return need;
 }
 
-// a GL frame failed (first frame, or a lost context later): go on with the CPU renderer
+// a GL frame failed (a GL error, or the context was lost: failed swap, GPU reset, X server gone):
+// go on with the CPU renderer on the same window, for good
 fn gl_fail(app: MythicApp*) {
-  print_err("MythicUI: an OpenGL frame failed, using the CPU renderer\n");
-  if (app->ui->trace) { println("trace: renderer cpu (a GL frame failed)"); }
+  var why: cstring = mythic_gl_error();
+  print_err("MythicUI: an OpenGL frame failed (");
+  var n: int64 = 0;
+  while (why[n] != (uint8)0 && n < 300) { n = n + 1; }
+  fwrite(why, 1, n, get_stderr());
+  print_err("), using the CPU renderer\n");
+  if (app->ui->trace) { print("trace: renderer cpu (a GL frame failed: "); trace_cstr(why); println(")"); }
   gl_drop(app);
-  app->renderer = mythic_renderer_create(app->fonts, app->images);
+  if (app->renderer == 0) { app->renderer = mythic_renderer_create(app->fonts, app->images); }
 }
 
 fn app_refresh(p: rawptr) {
   var app: MythicApp* = (MythicApp*)p;
   if (app == 0 || !app->running) { return; }
+  gl_poll(app);
   pump(app);
   app->force_full = true;
   run_frame(app, app->frame_fn, app->ud, app->plat->now_us(app->plat->self));
@@ -320,8 +419,10 @@ export fn mythic_app_step(app: MythicApp*, mythic_frame_cb: fn(MythicUi*, rawptr
     var dt: int64 = ui->next_frame_us - plat->now_us(plat->self);
     if (dt <= 0) { timeout = 0; } else { timeout = (int32)((dt + 999) / 1000); }
   }
+  if (gl_pending(app) && (timeout < 0 || timeout > 4)) { timeout = 4; }   // shaders compiling: look again soon
   plat->wait(plat->self, timeout);
-  if (pump(app)) { run_frame(app, mythic_frame_cb, ud, plat->now_us(plat->self)); }
+  var switched: bool = gl_poll(app);
+  if (pump(app) || switched) { run_frame(app, mythic_frame_cb, ud, plat->now_us(plat->self)); }
   return app->running;
 }
 
@@ -331,7 +432,7 @@ export fn mythic_app_ui(app: MythicApp*) -> MythicUi* { return app->ui; }
 export fn mythic_app_frames(app: MythicApp*) -> int64 { return app->frames; }
 export fn mythic_app_framebuffer(app: MythicApp*) -> MythicFramebuffer { return app->plat->framebuffer(app->plat->self); }
 export fn mythic_app_save_png(app: MythicApp*, path: string) -> bool {
-  if (app->gl != 0 && !app->headless) {
+  if (gl_on(app) && !app->headless) {
     var w: int32 = app->fb_w; var h: int32 = app->fb_h;
     if (w <= 0 || h <= 0) { return false; }
     var px: uint32* = (uint32*)malloc((int64)w * (int64)h * 4);
@@ -347,14 +448,22 @@ export fn mythic_app_save_png(app: MythicApp*, path: string) -> bool {
 }
 
 /// The renderer in use: MYTHIC_RENDERER_GL or MYTHIC_RENDERER_CPU.
+/// While GL shaders still compile at start-up the CPU renderer draws, and this says CPU.
 export fn mythic_app_renderer(app: MythicApp*) -> int32 {
-  if (app->gl != 0) { return MYTHIC_RENDERER_GL; }
+  if (gl_on(app)) { return MYTHIC_RENDERER_GL; }
   return MYTHIC_RENDERER_CPU;
+}
+
+/// Test hook (see mythic_gl_test_hook): the next `polls` shader polls say "compiling", the
+/// `lost_after`-th GL frame from now reports a lost context, `fail` makes the shader build fail.
+/// The env var MYTHIC_GL_TEST=wait=N,lost=N,fail does the same at start-up.
+export fn mythic_app_gl_test(app: MythicApp*, polls: int32, lost_after: int32, fail: bool) {
+  if (app->gl != 0) { mythic_gl_test_hook(app->gl, polls, lost_after, fail); }
 }
 export fn mythic_app_destroy(app: MythicApp*) {
   if (app == 0) { return; }
-  // before the window goes; with the display gone, leave GL alone (Xlib exits on any IO error)
-  if (app->gl != 0 && !app->ui->close_forced) { gl_drop(app); }
+  // before the window goes (Glint survives a dead X server now, and frees only what it can)
+  if (app->gl != 0) { gl_drop(app); }
   app->plat->close(app->plat->self);
   mythic_ctx_destroy(app->ui);
   mythic_renderer_destroy(app->renderer);

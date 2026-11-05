@@ -86,6 +86,12 @@ export struct MythicGLRenderer {
   bigs: MythicVec<GlBig>;
   big_slot: int32;
   max_tex: int32;                     // GL_MAX_TEXTURE_SIZE
+  prog_state: int32;                  // 1 linked and set up, 0 still compiling, -1 failed
+  lost: bool;                         // a frame found the context lost (or the test hook said so)
+  test_wait: int32;                   // test hook: polls that still say "compiling"
+  test_lost: int32;                   // test hook: the frame (counted from now) that reports a loss
+  test_fail: bool;                    // test hook: the program fails to build
+  warm: bool;                         // mythic_gl_warm: draw, don't show
 }
 
 fn use_ctx(g: MythicGLRenderer*) {
@@ -178,14 +184,24 @@ fn uniform_i(prog: uint32, name: cstring, v: int32) {
   if (loc >= 0) { glUniform1i(loc, v); }
 }
 
-/// Makes a renderer on the current context of `ctx` (GL 3.3 core or newer). `readback` = the
-/// context is headless and mythic_gl_read copies results into a CPU framebuffer. Returns 0 when
-/// the shaders do not build (mythic_gl_error says why).
+/// Makes a renderer on the current context of `ctx` (GL 3.3 core or newer) and waits for its
+/// shaders. `readback` = the context is headless and mythic_gl_read copies results into a CPU
+/// framebuffer. Returns 0 when the shaders do not build (mythic_gl_error says why).
 export fn mythic_gl_create(ctx: GlintContext*, f: MythicFonts*, im: MythicImages*, readback: bool) -> MythicGLRenderer* {
+  var g: MythicGLRenderer* = mythic_gl_create_async(ctx, f, im, readback);
+  if (g == 0) { return g; }
+  if (mythic_gl_poll(g, true) != 1) { mythic_gl_destroy(g); return (MythicGLRenderer*)0; }
+  return g;
+}
+
+/// Like mythic_gl_create, but returns while the driver still compiles the shaders (on its own
+/// threads with GL_KHR_parallel_shader_compile). Call mythic_gl_poll until it says 1 before
+/// mythic_gl_render; draw some other way meanwhile.
+export fn mythic_gl_create_async(ctx: GlintContext*, f: MythicFonts*, im: MythicImages*, readback: bool) -> MythicGLRenderer* {
   if (glint_gl_version(ctx) < 33) { g_mythic_gl_why = "GL 3.3 not available"; return (MythicGLRenderer*)0; }
   var vs: string = g_mythic_gl_vs;
   var fs: string = g_mythic_gl_fs;
-  var prog: uint32 = glint_program(vs, fs);
+  var prog: uint32 = glint_program_start(vs, fs);
   if (prog == (uint32)0) { g_mythic_gl_why = glint_error(); return (MythicGLRenderer*)0; }
   var g: MythicGLRenderer* = new MythicGLRenderer;
   g->ctx = ctx;
@@ -195,19 +211,6 @@ export fn mythic_gl_create(ctx: GlintContext*, f: MythicFonts*, im: MythicImages
   g->readback = readback;
   g->dmg = mythic_renderer_create(f, im);
   g->prog = prog;
-  glUseProgram(prog);
-  g->u_size = glGetUniformLocation(prog, "u_size");
-  uniform_i(prog, "u_glyphs", 0);
-  uniform_i(prog, "u_paths", 1);
-  uniform_i(prog, "u_image", 2);
-  uniform_i(prog, "u_clips", 3);
-  var lut: float32[256];
-  for i: int32 in 0..256 {
-    var v: float32 = mythic_powf((float32)i / 255.0, 1.0 / 1.25);
-    lut[i] = (float32)mythic_clampi(mythic_iround(v * 255.0), 0, 255);
-  }
-  var lg: int32 = glGetUniformLocation(prog, "u_gamma");
-  if (lg >= 0) { glUniform4fv(lg, 64, &lut[0]); }
   glGenVertexArrays(1, &g->vao);
   glBindVertexArray(g->vao);
   glGenBuffers(1, &g->vbo);
@@ -229,6 +232,81 @@ export fn mythic_gl_create(ctx: GlintContext*, f: MythicFonts*, im: MythicImages
     return (MythicGLRenderer*)0;
   }
   return g;
+}
+
+// the program linked: look its uniforms up and set the constant ones
+fn prog_setup(g: MythicGLRenderer*) -> bool {
+  var prog: uint32 = g->prog;
+  glUseProgram(prog);
+  g->u_size = glGetUniformLocation(prog, "u_size");
+  uniform_i(prog, "u_glyphs", 0);
+  uniform_i(prog, "u_paths", 1);
+  uniform_i(prog, "u_image", 2);
+  uniform_i(prog, "u_clips", 3);
+  var lut: float32[256];
+  for i: int32 in 0..256 {
+    var v: float32 = mythic_powf((float32)i / 255.0, 1.0 / 1.25);
+    lut[i] = (float32)mythic_clampi(mythic_iround(v * 255.0), 0, 255);
+  }
+  var lg: int32 = glGetUniformLocation(prog, "u_gamma");
+  if (lg >= 0) { glUniform4fv(lg, 64, &lut[0]); }
+  return glGetError() == GL_NO_ERROR;
+}
+
+/// Where the shader build stands: 1 ready (mythic_gl_render may be called), 0 still compiling,
+/// -1 failed (mythic_gl_error says why; destroy the renderer). `block` waits for the driver
+/// instead of answering 0. Cheap once it has said 1 or -1.
+export fn mythic_gl_poll(g: MythicGLRenderer*, block: bool) -> int32 {
+  if (g == 0) { return -1; }
+  if (g->prog_state != 0) { return g->prog_state; }
+  if (g->test_wait > 0) { g->test_wait = g->test_wait - 1; return 0; }
+  use_ctx(g);
+  if (g->test_fail) {
+    glDeleteProgram(g->prog);
+    g->prog = (uint32)0;
+    g_mythic_gl_why = "the shader program failed to build (test hook)";
+    g->prog_state = -1;
+    return -1;
+  }
+  if (block) {
+    var ok: int32 = 0;
+    glGetProgramiv(g->prog, GL_LINK_STATUS, &ok);     // the driver waits for its compile threads here
+  }
+  var st: int32 = glint_program_poll(g->prog);
+  if (st == 0) { return 0; }
+  if (st < 0) {
+    g->prog = (uint32)0;                              // Glint deleted it
+    g_mythic_gl_why = glint_error();
+    g->prog_state = -1;
+    return -1;
+  }
+  if (!prog_setup(g)) {
+    g_mythic_gl_why = "GL error while setting up the shader program";
+    g->prog_state = -1;
+    return -1;
+  }
+  g->prog_state = 1;
+  return 1;
+}
+
+/// Draws all of `dl` into the back buffer without showing it, and waits for it. The driver
+/// compiles its code for the shaders' state on the first draw (llvmpipe: about 150 ms cold), so do
+/// this once, after a frame from another renderer is on screen, then switch with a full frame.
+/// False if GL failed (mythic_gl_error says why).
+export fn mythic_gl_warm(g: MythicGLRenderer*, dl: MythicDrawList*, w: int32, h: int32) -> bool {
+  g->warm = true;
+  var n: int32 = mythic_gl_render(g, dl, w, h, true);
+  g->warm = false;
+  return n >= 0;
+}
+
+/// Test hook: the next `polls` polls say "still compiling"; the `lost_after`-th frame from now
+/// reports a lost context (0 = never); `fail` makes the shader build fail.
+export fn mythic_gl_test_hook(g: MythicGLRenderer*, polls: int32, lost_after: int32, fail: bool) {
+  if (g == 0) { return; }
+  g->test_wait = polls;
+  g->test_lost = lost_after;
+  g->test_fail = fail;
 }
 
 // ------------------------------------------------------------------ glyph atlas mirror
@@ -726,9 +804,13 @@ fn hist_push(g: MythicGLRenderer*, r: MythicRectI) {
 /// Draws the parts of `dl` that changed into the context's w x h drawable and shows them
 /// (swap with damage; nothing for a headless context, see mythic_gl_read). Returns the number of
 /// dirty rects (mythic_gl_dirty; 0 = nothing changed, nothing drawn), or -1 if GL reported an error
-/// (nothing shown; the caller drops GL).
+/// or the context is lost (mythic_gl_error says which; the caller drops GL and draws the frame
+/// another way).
 export fn mythic_gl_render(g: MythicGLRenderer*, dl: MythicDrawList*, w: int32, h: int32, force_full: bool) -> int32 {
+  if (g->prog_state != 1) { g_mythic_gl_why = "the shader program is not ready"; return -1; }
+  if (g->lost || g->ctx->lost) { g->lost = true; g_mythic_gl_why = "the GL context was lost"; return -1; }
   use_ctx(g);
+  if (glint_context_lost(g->ctx)) { g->lost = true; g_mythic_gl_why = "the GL context was lost"; return -1; }
   var force: bool = force_full;
   if (w != g->w || h != g->h) {
     glint_resize(g->ctx, w, h);
@@ -817,8 +899,15 @@ export fn mythic_gl_render(g: MythicGLRenderer*, dl: MythicDrawList*, w: int32, 
   var tries: int32 = 0;
   while (tries < 16 && glGetError() != GL_NO_ERROR) { err = true; tries = tries + 1; }   // bounded: a lost context may not clear
   g->frames = g->frames + 1;
-  if (err) { return -1; }        // any frame: a lost context shows up as errors
-  if (!g->readback) { glint_swap_damage(g->ctx, (int32*)rects, n); }
+  if (err) { g_mythic_gl_why = "GL error in a frame"; return -1; }   // a plain context shows a loss as errors
+  if (g->warm) { glFinish(); return n; }
+  if (!g->readback) { glint_swap_damage(g->ctx, (int32*)rects, n); }   // false only means no damage extension
+  if (g->test_lost > 0) {
+    g->test_lost = g->test_lost - 1;
+    if (g->test_lost == 0) { g->lost = true; }
+  }
+  // a failed swap, a GPU reset (robust context) or a dead X server: the frame did not reach the screen
+  if (g->lost || glint_context_lost(g->ctx)) { g->lost = true; g_mythic_gl_why = "the GL context was lost"; return -1; }
   return n;
 }
 
@@ -857,17 +946,9 @@ export fn mythic_gl_path_uploads(g: MythicGLRenderer*) -> int64 { return g->path
 /// Frees the renderer's GL objects (the context stays) and its CPU-side state.
 export fn mythic_gl_destroy(g: MythicGLRenderer*) {
   if (g == 0) { return; }
-  use_ctx(g);
-  if (g->prog != (uint32)0) { glDeleteProgram(g->prog); }
-  if (g->vbo != (uint32)0) { glDeleteBuffers(1, &g->vbo); }
-  if (g->vao != (uint32)0) { glDeleteVertexArrays(1, &g->vao); }
-  if (g->tex_glyphs != (uint32)0) { glDeleteTextures(1, &g->tex_glyphs); }
-  if (g->tex_paths != (uint32)0) { glDeleteTextures(1, &g->tex_paths); }
-  if (g->tex_clips != (uint32)0) { glDeleteTextures(1, &g->tex_clips); }
-  if (g->tex_big != (uint32)0) { glDeleteTextures(1, &g->tex_big); }
-  for i: int64 in 0..g->imgs.len {
-    if (g->imgs.data[i].tex != (uint32)0) { glDeleteTextures(1, &g->imgs.data[i].tex); }
-  }
+  // on a really lost context the GL objects go with it (and with a dead X server even making it
+  // current could fail): only the CPU side is freed then
+  if (!g->ctx->lost) { gl_free(g); }
   mythic_renderer_destroy(g->dmg);
   mythic_vec_free<GlInst>(&g->insts);
   mythic_vec_free<GlBatch>(&g->batches);
@@ -884,6 +965,20 @@ export fn mythic_gl_destroy(g: MythicGLRenderer*) {
   g_mythic_gl_cur = (GlintContext*)0;
 }
 
+fn gl_free(g: MythicGLRenderer*) {
+  use_ctx(g);
+  if (g->prog != (uint32)0) { glDeleteProgram(g->prog); }
+  if (g->vbo != (uint32)0) { glDeleteBuffers(1, &g->vbo); }
+  if (g->vao != (uint32)0) { glDeleteVertexArrays(1, &g->vao); }
+  if (g->tex_glyphs != (uint32)0) { glDeleteTextures(1, &g->tex_glyphs); }
+  if (g->tex_paths != (uint32)0) { glDeleteTextures(1, &g->tex_paths); }
+  if (g->tex_clips != (uint32)0) { glDeleteTextures(1, &g->tex_clips); }
+  if (g->tex_big != (uint32)0) { glDeleteTextures(1, &g->tex_big); }
+  for i: int64 in 0..g->imgs.len {
+    if (g->imgs.data[i].tex != (uint32)0) { glDeleteTextures(1, &g->imgs.data[i].tex); }
+  }
+}
+
 // ------------------------------------------------------------------ offscreen
 
 var g_mythic_gl_off_ctx: GlintContext* = 0;
@@ -893,12 +988,13 @@ var g_mythic_gl_off_failed: bool = false;
 /// The renderer mythic_gl_render_offscreen uses (0 before its first frame), for tests.
 export fn mythic_gl_offscreen_renderer() -> MythicGLRenderer* { return g_mythic_gl_off; }
 
-/// GL config MythicUI asks Glint for: GL 3.3 core, no depth or stencil, vsync on.
+/// GL config MythicUI asks Glint for: GL 3.3 core, no depth or stencil, vsync on, robust.
 export fn mythic_gl_config() -> GlintConfig {
   var cfg: GlintConfig = glint_config();
   cfg.major = 3; cfg.minor = 3;
   cfg.want_major = 3; cfg.want_minor = 3;
   cfg.depth_bits = 0; cfg.stencil_bits = 0;
+  cfg.robust = true;                  // a GPU reset loses the context instead of hanging; plain if the driver can't
   return cfg;
 }
 
