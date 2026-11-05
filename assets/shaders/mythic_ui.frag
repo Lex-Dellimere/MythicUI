@@ -11,7 +11,8 @@
 // 4 GRAD    | shape               | radii         | x0 y0 dx/l2 dy/l2    |      (colors premultiplied)
 // 5 GLYPH   | atlas dx dy page darken
 // 6 IMAGE   | shape               | radii         | ix iy isx isy        | opacity
-// 7 PATH    | sprite dx dy
+// 7 PATH    | sprite dx dy        (u_paths, the sprite atlas)
+// 8 PATH    | band dx dy          (u_image, the band texture of an oversized path)
 uniform vec2 u_size;
 uniform sampler2DArray u_glyphs;
 uniform sampler2D u_paths;
@@ -260,8 +261,9 @@ void main() {
     if (cv == 0) { discard; }
     if (v_a.w != 0.0) { cv = int(u_gamma[cv >> 2][cv & 3]); }
     a = (cv * col.x + 127) / 255;
-  } else if (kind == 7) {
-    float v = texelFetch(u_paths, ivec2(int(p.x) + int(v_a.x), int(p.y) + int(v_a.y)), 0).r;
+  } else if (kind == 7 || kind == 8) {
+    ivec2 t = ivec2(int(p.x) + int(v_a.x), int(p.y) + int(v_a.y));
+    float v = kind == 7 ? texelFetch(u_paths, t, 0).r : texelFetch(u_image, t, 0).r;
     if (v <= 0.0) { discard; }
     a = int(ca * v + 0.5);
   }
