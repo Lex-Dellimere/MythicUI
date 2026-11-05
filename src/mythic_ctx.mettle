@@ -53,6 +53,7 @@ export struct MythicInput {
   text: MythicVec<uint32>;
   mouse_inside: bool;
   key_downs: int32;                // key presses fed this frame, including ones a widget consumed
+  moved: bool;                     // pointer motion fed this frame (trickle, §4)
 }
 
 export struct MythicResp { id: uint64; rect: MythicRect; hovered: bool; pressed: bool; clicked: bool;
@@ -246,23 +247,41 @@ export fn mythic_ctx_input_begin(ui: MythicUi*) {
   mythic_vec_clear<MythicKeyEvent>(&ui->in.keys);
   mythic_vec_clear<uint32>(&ui->in.text);
   ui->in.key_downs = 0;
+  ui->in.moved = false;
 }
 
-/// Feeds one platform event. Returns false when the event must wait for the next frame
-/// (mouse-button trickle: at most one transition per button per frame, §4; keys and text that
-/// would otherwise apply out of order); the caller keeps it.
-/// Returns true when consumed.
+// a mouse-button transition was fed this frame
+fn button_changed(ui: MythicUi*) -> bool {
+  for i: int32 in 0..4 { if (ui->in.mouse_pressed[i] || ui->in.mouse_released[i]) { return true; } }
+  return false;
+}
+
+fn any_button_down(ui: MythicUi*) -> bool {
+  for i: int32 in 0..4 { if (ui->in.mouse_down[i]) { return true; } }
+  return false;
+}
+
+/// Feeds one platform event. Returns false when the event must wait for the next frame; the
+/// caller keeps it. Mouse-button trickle (§4, Amendment 26): at most one transition per button per
+/// frame; pointer motion is coalesced only between transitions, so motion after a transition
+/// waits (a press hit-tests where it happened, a release is never followed by motion it did not
+/// see), and while a button is down a transition after motion waits (a drag sees the motion that
+/// came before its release with the button still down). Keys and text that would otherwise apply
+/// out of order wait too. Returns true when consumed.
 export fn mythic_ctx_feed(ui: MythicUi*, ev: MythicEvent*) -> bool {
   var k: int32 = ev->kind;
   var s: float32 = ui->scale;
   if (s <= 0.0) { s = 1.0; }
   if (k == MYTHIC_EV_MOUSE_MOVE) {
+    if (button_changed(ui)) { return false; }
     ui->in.mouse.x = ev->x / s; ui->in.mouse.y = ev->y / s;
     ui->in.mouse_inside = true;
+    ui->in.moved = true;
   } else if (k == MYTHIC_EV_MOUSE_DOWN || k == MYTHIC_EV_MOUSE_UP) {
     var b: int32 = ev->button;
     if (b < 1 || b > 3) { return true; }
     if (ui->in.mouse_pressed[b] || ui->in.mouse_released[b]) { return false; }
+    if (ui->in.moved && any_button_down(ui)) { return false; }
     ui->in.mouse.x = ev->x / s; ui->in.mouse.y = ev->y / s;
     ui->in.mouse_inside = true;
     ui->in.mods = ev->mods;
@@ -324,6 +343,7 @@ export fn mythic_ctx_feed(ui: MythicUi*, ev: MythicEvent*) -> bool {
       ui->size.x = (float32)ui->dev_w / ev->scale; ui->size.y = (float32)ui->dev_h / ev->scale;
     }
   } else if (k == MYTHIC_EV_MOUSE_LEAVE) {
+    if (button_changed(ui)) { return false; }   // a click just before leaving still lands
     ui->in.mouse_inside = false;
   } else if (k == MYTHIC_EV_FOCUS_OUT) {
     ui->in.mouse_inside = false;

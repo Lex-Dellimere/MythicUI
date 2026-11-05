@@ -1102,13 +1102,23 @@ fn x11_wait(self: rawptr, timeout_ms: int32) {
   var x: MythicX11* = (MythicX11*)self;
   var deadline: int64 = now_mono_us() + (int64)timeout_ms * 1000;
   var hdr: uint8[32];
+  var drained: int32 = 0;
   while (true) {
     while (x->rq_head < x->rq_tail) {
       rq_pop(x, &hdr[0]);
       translate(x, &hdr[0]);
     }
-    if (x->eq_tail > x->eq_head || x->dead || !x->opened) { break; }
-    if (x->rpos == x->rlen) {
+    if (x->dead || !x->opened) { break; }
+    if (x->eq_tail > x->eq_head) {
+      // Something is queued: also take everything else the server has already sent, so a slow
+      // frame sees the whole backlog (motion coalesces in push_ev, buttons trickle in the ctx)
+      // instead of one event per frame, which let a drag crawl on long after the release.
+      // The queue keeps room for one more packet's events, and a stream that never pauses
+      // cannot hold the loop here: the rest stays in the socket for the next wait.
+      if (x->eq_tail - x->eq_head >= X_EQCAP - 8 || drained >= X_RQCAP) { break; }
+      if (x->rpos == x->rlen && poll_fd(x, 0) <= 0) { break; }
+      drained = drained + 1;
+    } else if (x->rpos == x->rlen) {
       var remaining: int64 = -1;
       if (timeout_ms >= 0) {
         remaining = (deadline - now_mono_us() + 999) / 1000;
