@@ -35,7 +35,7 @@ mythic=path/to/MythicUI/src
 ```
 
 MythicUI draws with OpenGL 3.3 when it can, through [Glint](https://github.com/Lex-Dellimere/Glint) (clone it next to MythicUI, or put `glint=path/to/Glint/src` in a `mettle.deps` in a folder above MythicUI's), and falls back to its CPU renderer when GL is missing or fails. GL libraries are loaded at run time, so nothing extra is needed to run.
-Set `MYTHIC_RENDERER=cpu` or `MYTHIC_RENDERER=gl` to pick one, or `renderer: MYTHIC_RENDERER_CPU` in the app description.
+Set `MYTHIC_RENDERER=cpu` or `MYTHIC_RENDERER=gl` to pick one, or `renderer: MYTHIC_RENDERER_CPU` in the app description. Inside a frame, `mythic_renderer(ui)` tells you which one is drawing and `mythic_frame_ms(ui)` how long the last frame took.
 
 Then write your app:
 
